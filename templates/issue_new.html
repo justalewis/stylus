@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}New issue | {{ journal['name'] }}{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>New issue</h1>
+  <p class="dim">{{ journal['name'] }}</p>
+  <form method="post" class="stack">
+    <label>Volume <span class="required" style="color:#b54e2c">*</span>
+      <input type="number" name="volume" min="1" required />
+    </label>
+    <label>Issue number <span class="required" style="color:#b54e2c">*</span>
+      <input type="number" name="issue_number" min="1" required />
+    </label>
+    <label>Year <span class="required" style="color:#b54e2c">*</span>
+      <input type="number" name="year" min="1900" max="2100" required />
+    </label>
+    <label>Title (optional, for special issues)
+      <input type="text" name="title" placeholder="e.g., AI, Empire, and the Composition Classroom" />
+    </label>
+    <div>
+      <button type="submit">Create issue</button>
+      <a class="button ghost" href="{{ url_for('journal_home', slug=journal['slug']) }}">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

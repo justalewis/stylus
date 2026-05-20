@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Metadata | Issue {{ issue['volume'] }}.{{ issue['issue_number'] }}{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Edit issue metadata</h1>
+  <p class="dim">
+    {{ issue['journal_name'] }}
+    &middot; <a href="{{ url_for('issue_home', issue_id=issue['id']) }}">Back to issue</a>
+  </p>
+  <form method="post" class="stack">
+    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;">
+      <label>Volume <span style="color:#b54e2c">*</span>
+        <input type="number" name="volume" value="{{ issue['volume'] }}" min="1" required />
+      </label>
+      <label>Issue number <span style="color:#b54e2c">*</span>
+        <input type="number" name="issue_number" value="{{ issue['issue_number'] }}" min="1" required />
+      </label>
+      <label>Year <span style="color:#b54e2c">*</span>
+        <input type="number" name="year" value="{{ issue['year'] }}" min="1900" max="2100" required />
+      </label>
+    </div>
+    <label>Title (special-issue title; leave blank for a regular issue)
+      <input type="text" name="title" value="{{ issue['title'] or '' }}" />
+    </label>
+    <label>Status
+      <select name="status">
+        {% for s in ['draft', 'in-production', 'published'] %}
+        <option value="{{ s }}" {% if issue['status'] == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div>
+      <button type="submit">Save</button>
+      <a class="button ghost" href="{{ url_for('issue_home', issue_id=issue['id']) }}">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

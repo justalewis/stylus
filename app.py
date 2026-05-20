@@ -72,7 +72,12 @@ def register_routes(app: Flask):
             "FROM articles a JOIN journals j ON a.journal_id = j.id "
             "ORDER BY a.updated_at DESC LIMIT 20"
         )
-        return render_template("dashboard.html", journals=journals, recent=recent)
+        recent_issues = db.query_all(
+            "SELECT i.*, j.name AS journal_name FROM issues i "
+            "JOIN journals j ON i.journal_id = j.id "
+            "ORDER BY i.year DESC, i.volume DESC, i.issue_number DESC LIMIT 10"
+        )
+        return render_template("dashboard.html", journals=journals, recent=recent, recent_issues=recent_issues)
 
     # ---------- journal ----------
 
@@ -86,7 +91,232 @@ def register_routes(app: Flask):
             "SELECT * FROM articles WHERE journal_id = ? ORDER BY updated_at DESC",
             (j["id"],),
         )
-        return render_template("journal.html", journal=j, articles=articles)
+        issues = db.query_all(
+            "SELECT * FROM issues WHERE journal_id = ? ORDER BY year DESC, volume DESC, issue_number DESC",
+            (j["id"],),
+        )
+        return render_template("journal.html", journal=j, articles=articles, issues=issues)
+
+    # ---------- issues ----------
+
+    @app.route("/issues")
+    @login_required
+    def issues_list():
+        rows = db.query_all(
+            "SELECT i.*, j.slug AS journal_slug, j.name AS journal_name, "
+            "       (SELECT COUNT(*) FROM articles a WHERE a.issue_id = i.id) AS article_count "
+            "FROM issues i JOIN journals j ON i.journal_id = j.id "
+            "ORDER BY i.year DESC, i.volume DESC, i.issue_number DESC"
+        )
+        return render_template("issues.html", issues=rows)
+
+    @app.route("/journals/<slug>/issues/new", methods=["GET", "POST"])
+    @login_required
+    def issue_new(slug):
+        journal = db.query_one("SELECT * FROM journals WHERE slug = ?", (slug,))
+        if not journal:
+            abort(404)
+        if request.method == "POST":
+            try:
+                volume = int(request.form.get("volume", "").strip())
+                issue_number = int(request.form.get("issue_number", "").strip())
+                year = int(request.form.get("year", "").strip())
+            except ValueError:
+                flash("Volume, issue number, and year must be integers.", "error")
+                return redirect(request.url)
+            title = request.form.get("title", "").strip() or None
+            existing = db.query_one(
+                "SELECT id FROM issues WHERE journal_id = ? AND volume = ? AND issue_number = ?",
+                (journal["id"], volume, issue_number),
+            )
+            if existing:
+                flash(f"Issue {volume}.{issue_number} already exists for {journal['name']}.", "error")
+                return redirect(request.url)
+            issue_id = db.execute(
+                "INSERT INTO issues (journal_id, volume, issue_number, year, title, status) "
+                "VALUES (?, ?, ?, ?, ?, 'draft')",
+                (journal["id"], volume, issue_number, year, title),
+            )
+            islug = conversion.issue_slug_for(volume, issue_number, year)
+            conversion.issue_dir(slug, islug)
+            conversion.write_issue_yaml(slug, islug, {
+                "volume": volume,
+                "issue": issue_number,
+                "year": year,
+                "title": title,
+                "journal": journal["name"],
+                "issn": journal["issn"],
+                "status": "draft",
+            })
+            flash(f"Created issue {volume}.{issue_number} ({year}).", "success")
+            return redirect(url_for("issue_home", issue_id=issue_id))
+        return render_template("issue_new.html", journal=journal)
+
+    @app.route("/issues/<int:issue_id>")
+    @login_required
+    def issue_home(issue_id):
+        issue = db.query_one(
+            "SELECT i.*, j.slug AS journal_slug, j.name AS journal_name "
+            "FROM issues i JOIN journals j ON i.journal_id = j.id WHERE i.id = ?",
+            (issue_id,),
+        )
+        if not issue:
+            abort(404)
+        articles = db.query_all(
+            "SELECT * FROM articles WHERE issue_id = ? "
+            "ORDER BY COALESCE(order_in_issue, 999999), updated_at",
+            (issue_id,),
+        )
+        unfiled = db.query_all(
+            "SELECT * FROM articles WHERE journal_id = ? AND issue_id IS NULL "
+            "ORDER BY updated_at DESC",
+            (issue["journal_id"],),
+        )
+        return render_template("issue.html", issue=issue, articles=articles, unfiled=unfiled)
+
+    @app.route("/issues/<int:issue_id>/metadata", methods=["GET", "POST"])
+    @login_required
+    def issue_metadata(issue_id):
+        issue = db.query_one(
+            "SELECT i.*, j.slug AS journal_slug, j.name AS journal_name "
+            "FROM issues i JOIN journals j ON i.journal_id = j.id WHERE i.id = ?",
+            (issue_id,),
+        )
+        if not issue:
+            abort(404)
+        if request.method == "POST":
+            try:
+                volume = int(request.form.get("volume", "").strip())
+                issue_number = int(request.form.get("issue_number", "").strip())
+                year = int(request.form.get("year", "").strip())
+            except ValueError:
+                flash("Volume, issue, and year must be integers.", "error")
+                return redirect(request.url)
+            title = request.form.get("title", "").strip() or None
+            status = request.form.get("status", "draft")
+            db.execute(
+                "UPDATE issues SET volume = ?, issue_number = ?, year = ?, title = ?, status = ? WHERE id = ?",
+                (volume, issue_number, year, title, status, issue_id),
+            )
+            islug = conversion.issue_slug_for(volume, issue_number, year)
+            conversion.write_issue_yaml(issue["journal_slug"], islug, {
+                "volume": volume,
+                "issue": issue_number,
+                "year": year,
+                "title": title,
+                "journal": issue["journal_name"],
+                "status": status,
+            })
+            flash("Issue metadata saved.", "success")
+            return redirect(url_for("issue_home", issue_id=issue_id))
+        return render_template("issue_metadata.html", issue=issue)
+
+    @app.route("/issues/<int:issue_id>/add-article", methods=["POST"])
+    @login_required
+    def issue_add_article(issue_id):
+        issue = db.query_one(
+            "SELECT i.*, j.slug AS journal_slug FROM issues i "
+            "JOIN journals j ON i.journal_id = j.id WHERE i.id = ?",
+            (issue_id,),
+        )
+        if not issue:
+            abort(404)
+        try:
+            article_id = int(request.form.get("article_id", ""))
+        except ValueError:
+            flash("Invalid article selection.", "error")
+            return redirect(url_for("issue_home", issue_id=issue_id))
+        article = db.query_one("SELECT * FROM articles WHERE id = ?", (article_id,))
+        if not article or article["journal_id"] != issue["journal_id"]:
+            flash("Article not found in this journal.", "error")
+            return redirect(url_for("issue_home", issue_id=issue_id))
+
+        islug = conversion.issue_slug_for(issue["volume"], issue["issue_number"], issue["year"])
+        try:
+            new_path = conversion.move_article_to_issue(
+                Path(article["project_path"]),
+                issue["journal_slug"],
+                islug,
+                article["slug"],
+            )
+        except FileExistsError as exc:
+            flash(f"Could not move article: {exc}", "error")
+            return redirect(url_for("issue_home", issue_id=issue_id))
+
+        max_row = db.query_one(
+            "SELECT COALESCE(MAX(order_in_issue), 0) AS m FROM articles WHERE issue_id = ?",
+            (issue_id,),
+        )
+        next_order = (max_row["m"] or 0) + 1
+        db.execute(
+            "UPDATE articles SET issue_id = ?, order_in_issue = ?, project_path = ?, "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (issue_id, next_order, str(new_path), article_id),
+        )
+        flash(f"Added {article['title']!r} to issue.", "success")
+        return redirect(url_for("issue_home", issue_id=issue_id))
+
+    @app.route("/issues/<int:issue_id>/remove-article/<int:article_id>", methods=["POST"])
+    @login_required
+    def issue_remove_article(issue_id, article_id):
+        issue = db.query_one(
+            "SELECT i.*, j.slug AS journal_slug FROM issues i "
+            "JOIN journals j ON i.journal_id = j.id WHERE i.id = ?",
+            (issue_id,),
+        )
+        if not issue:
+            abort(404)
+        article = db.query_one("SELECT * FROM articles WHERE id = ?", (article_id,))
+        if not article or article["issue_id"] != issue_id:
+            flash("Article is not in this issue.", "error")
+            return redirect(url_for("issue_home", issue_id=issue_id))
+
+        try:
+            new_path = conversion.move_article_to_unfiled(
+                Path(article["project_path"]),
+                issue["journal_slug"],
+                article["slug"],
+            )
+        except FileExistsError as exc:
+            flash(f"Could not move article: {exc}", "error")
+            return redirect(url_for("issue_home", issue_id=issue_id))
+
+        db.execute(
+            "UPDATE articles SET issue_id = NULL, order_in_issue = NULL, "
+            "start_page = NULL, end_page = NULL, project_path = ?, "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (str(new_path), article_id),
+        )
+        flash(f"Removed {article['title']!r} from issue.", "success")
+        return redirect(url_for("issue_home", issue_id=issue_id))
+
+    @app.route("/issues/<int:issue_id>/reorder/<int:article_id>/<direction>", methods=["POST"])
+    @login_required
+    def issue_reorder_article(issue_id, article_id, direction):
+        if direction not in {"up", "down"}:
+            abort(400)
+        rows = db.query_all(
+            "SELECT id, order_in_issue FROM articles WHERE issue_id = ? "
+            "ORDER BY COALESCE(order_in_issue, 999999), updated_at",
+            (issue_id,),
+        )
+        ids = [r["id"] for r in rows]
+        if article_id not in ids:
+            flash("Article not in this issue.", "error")
+            return redirect(url_for("issue_home", issue_id=issue_id))
+        idx = ids.index(article_id)
+        if direction == "up" and idx > 0:
+            ids[idx - 1], ids[idx] = ids[idx], ids[idx - 1]
+        elif direction == "down" and idx < len(ids) - 1:
+            ids[idx + 1], ids[idx] = ids[idx], ids[idx + 1]
+        else:
+            return redirect(url_for("issue_home", issue_id=issue_id))
+        for new_order, aid in enumerate(ids, start=1):
+            db.execute(
+                "UPDATE articles SET order_in_issue = ? WHERE id = ?",
+                (new_order, aid),
+            )
+        return redirect(url_for("issue_home", issue_id=issue_id))
 
     # ---------- upload ----------
 

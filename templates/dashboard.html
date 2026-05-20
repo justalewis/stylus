@@ -21,6 +21,27 @@
 </section>
 
 <section class="card">
+  <h2>Recent issues</h2>
+  {% if recent_issues %}
+  <table class="data">
+    <thead><tr><th>Issue</th><th>Journal</th><th>Title</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for i in recent_issues %}
+      <tr>
+        <td><a href="{{ url_for('issue_home', issue_id=i['id']) }}">{{ i['volume'] }}.{{ i['issue_number'] }} ({{ i['year'] }})</a></td>
+        <td>{{ i['journal_name'] }}</td>
+        <td>{{ i['title'] or '' }}</td>
+        <td><span class="badge status-{{ i['status'] }}">{{ i['status'] }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="dim">No issues yet. Pick a journal and create one.</p>
+  {% endif %}
+</section>
+
+<section class="card">
   <h2>Recent articles</h2>
   {% if recent %}
   <table class="data">

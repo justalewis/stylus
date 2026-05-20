@@ -32,6 +32,49 @@ def article_dir(journal_slug: str, issue_slug: Optional[str], article_slug: str)
     return d
 
 
+def issue_dir(journal_slug: str, issue_slug: str) -> Path:
+    d = CONTENT_DIR / "journals" / journal_slug / "issues" / issue_slug
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "articles").mkdir(exist_ok=True)
+    return d
+
+
+def issue_slug_for(volume, issue_number, year) -> str:
+    return f"v{volume}-n{issue_number}-{year}"
+
+
+def move_article_to_issue(article_path: Path, journal_slug: str, issue_slug: str, article_slug: str) -> Path:
+    """Move an article directory to its issue location. Returns new path."""
+    import shutil
+    dest = CONTENT_DIR / "journals" / journal_slug / "issues" / issue_slug / "articles" / article_slug
+    if dest.exists():
+        raise FileExistsError(f"Destination already exists: {dest}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(article_path), str(dest))
+    return dest
+
+
+def move_article_to_unfiled(article_path: Path, journal_slug: str, article_slug: str) -> Path:
+    """Move an article directory back to _unfiled. Returns new path."""
+    import shutil
+    dest = CONTENT_DIR / "journals" / journal_slug / "_unfiled" / article_slug
+    if dest.exists():
+        raise FileExistsError(f"Destination already exists: {dest}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(article_path), str(dest))
+    return dest
+
+
+def write_issue_yaml(journal_slug: str, issue_slug: str, payload: dict):
+    """Persist issue-level metadata to `_issue.yaml` alongside the issue directory."""
+    import yaml
+    d = issue_dir(journal_slug, issue_slug)
+    (d / "_issue.yaml").write_text(
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True, width=10_000),
+        encoding="utf-8",
+    )
+
+
 def template_dir(journal_slug: str) -> Path:
     return CONTENT_DIR / "journals" / journal_slug / "template"
 

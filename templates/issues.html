@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Issues | LiCS Pipeline{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Issues</h1>
+  <p class="dim">All issues across journals, newest first.</p>
+  {% if issues %}
+  <table class="data">
+    <thead>
+      <tr><th>Issue</th><th>Journal</th><th>Title</th><th>Articles</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+      {% for i in issues %}
+      <tr>
+        <td><a href="{{ url_for('issue_home', issue_id=i['id']) }}"><strong>{{ i['volume'] }}.{{ i['issue_number'] }}</strong> ({{ i['year'] }})</a></td>
+        <td>{{ i['journal_name'] }}</td>
+        <td>{{ i['title'] or '' }}</td>
+        <td class="dim">{{ i['article_count'] }}</td>
+        <td><span class="badge status-{{ i['status'] }}">{{ i['status'] }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="dim">No issues yet. Go to a journal and create one.</p>
+  {% endif %}
+</section>
+{% endblock %}

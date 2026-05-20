@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}{{ issue['journal_name'] }} {{ issue['volume'] }}.{{ issue['issue_number'] }} ({{ issue['year'] }}){% endblock %}
+{% block content %}
+<section class="card">
+  <h1>{{ issue['journal_name'] }} {{ issue['volume'] }}.{{ issue['issue_number'] }} ({{ issue['year'] }})</h1>
+  {% if issue['title'] %}<p class="dim">{{ issue['title'] }}</p>{% endif %}
+  <p class="dim">
+    status: <span class="badge status-{{ issue['status'] }}">{{ issue['status'] }}</span>
+    &middot; <a href="{{ url_for('issue_metadata', issue_id=issue['id']) }}">Edit metadata</a>
+    &middot; <a href="{{ url_for('journal_home', slug=issue['journal_slug']) }}">Back to {{ issue['journal_name'] }}</a>
+  </p>
+</section>
+
+<section class="card">
+  <h2>Articles in this issue</h2>
+  {% if articles %}
+  <table class="data">
+    <thead>
+      <tr><th style="width:3.5rem">Order</th><th>Title</th><th>Slug</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for a in articles %}
+      <tr>
+        <td class="dim">
+          <form method="post" action="{{ url_for('issue_reorder_article', issue_id=issue['id'], article_id=a['id'], direction='up') }}" style="display:inline">
+            <button type="submit" class="button ghost small" {% if loop.first %}disabled{% endif %} title="Move up">&uarr;</button>
+          </form>
+          <form method="post" action="{{ url_for('issue_reorder_article', issue_id=issue['id'], article_id=a['id'], direction='down') }}" style="display:inline">
+            <button type="submit" class="button ghost small" {% if loop.last %}disabled{% endif %} title="Move down">&darr;</button>
+          </form>
+        </td>
+        <td><a href="{{ url_for('article_home', article_id=a['id']) }}">{{ a['title'] }}</a></td>
+        <td><code>{{ a['slug'] }}</code></td>
+        <td><span class="badge status-{{ a['status'] }}">{{ a['status'] }}</span></td>
+        <td>
+          <form method="post" action="{{ url_for('issue_remove_article', issue_id=issue['id'], article_id=a['id']) }}" style="display:inline" onsubmit="return confirm('Remove this article from the issue? The directory will move back to _unfiled.');">
+            <button type="submit" class="button ghost small">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="dim">No articles assigned to this issue yet.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Add an article</h2>
+  {% if unfiled %}
+  <form method="post" action="{{ url_for('issue_add_article', issue_id=issue['id']) }}" class="stack">
+    <label>Pick an unfiled article from this journal
+      <select name="article_id" required>
+        <option value="">&mdash; choose &mdash;</option>
+        {% for a in unfiled %}
+        <option value="{{ a['id'] }}">{{ a['title'] }} <span>({{ a['slug'] }})</span></option>
+        {% endfor %}
+      </select>
+    </label>
+    <p class="dim">Adding moves the article directory under <code>issues/v{{ issue['volume'] }}-n{{ issue['issue_number'] }}-{{ issue['year'] }}/articles/&lt;slug&gt;/</code>.</p>
+    <div><button type="submit">Add to issue</button></div>
+  </form>
+  {% else %}
+  <p class="dim">No unfiled articles in {{ issue['journal_name'] }}. Upload one from the dashboard or the journal page.</p>
+  {% endif %}
+</section>
+{% endblock %}
