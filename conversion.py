@@ -209,7 +209,7 @@ _FIELD_ORDER = (
     "author",
     "abstract",
     "keywords",
-    "short-title", "short-authors",
+    "short-title", "short-authors", "footer",
     "doi",
     "journal", "issn", "volume", "issue", "year",
     "start-page", "end-page",

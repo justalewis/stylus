@@ -279,7 +279,7 @@ section.references p {
     color: #4a4137;
   }
   @bottom-center {
-    content: counter(page);
+    content: string(footer-text) counter(page);
     font-family: "EB Garamond", "Garamond", Georgia, serif;
     font-size: 9.5pt;
     color: #4a4137;
@@ -292,9 +292,13 @@ section.references p {
   @bottom-center { content: none; }
 }
 
-/* Pull the named strings out of the document so @page rules can use them. */
+/* Pull the named strings out of the document so @page rules can use them.
+ * footer-text is rendered with a trailing separator so the page counter
+ * follows naturally; when the article has no per-article footer, the
+ * named string is empty and only the counter shows. */
 .short-title-anchor { string-set: short-title content(); position: absolute; left: -9999px; top: -9999px; }
 .short-authors-anchor { string-set: short-authors content(); position: absolute; left: -9999px; top: -9999px; }
+.footer-anchor { string-set: footer-text "" content() "  \00b7  "; position: absolute; left: -9999px; top: -9999px; }
 
 @media print {
   html { font-size: 11.25pt; }

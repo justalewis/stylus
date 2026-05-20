@@ -197,7 +197,7 @@ def register_routes(app: Flask):
         if request.method == "POST":
             updated = dict(fm)
             for key in (
-                "title", "subtitle", "short-title", "short-authors",
+                "title", "subtitle", "short-title", "short-authors", "footer",
                 "doi", "abstract", "status", "copyright",
                 "journal", "volume", "issue", "year",
             ):
@@ -265,7 +265,15 @@ def register_routes(app: Flask):
                     "UPDATE articles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (article_id,),
                 )
-            flash("Metadata saved. Re-render to update HTML/PDF.", "success")
+
+            render_result = conversion.render_all(apath, article["journal_slug"])
+            if render_result.errors:
+                flash(
+                    "Metadata saved, but re-render had issues: " + "; ".join(render_result.errors),
+                    "error",
+                )
+            else:
+                flash("Metadata saved and re-rendered.", "success")
             return redirect(url_for("article_home", article_id=article_id))
 
         kw_string = ""

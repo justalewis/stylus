@@ -15,13 +15,26 @@
     border-radius: 4px;
     background: #fffdf7;
   }
-  .author-row .remove-btn {
-    background: transparent;
-    color: var(--warn);
-    border: 1px solid var(--warn);
-    padding: 0.35rem 0.6rem;
+  .author-row .row-actions {
+    display: flex;
+    gap: 0.25rem;
+    align-items: end;
   }
-  .author-row .remove-btn:hover { background: var(--warn); color: #fff; }
+  .author-row .row-actions button {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--rule);
+    padding: 0.35rem 0.5rem;
+    font-size: 0.9rem;
+    min-width: 2rem;
+  }
+  .author-row .row-actions button:hover { background: var(--accent-soft); color: var(--accent); }
+  .author-row .row-actions button:disabled { opacity: 0.35; cursor: not-allowed; }
+  .author-row .row-actions button.remove-btn {
+    color: var(--warn);
+    border-color: var(--warn);
+  }
+  .author-row .row-actions button.remove-btn:hover { background: var(--warn); color: #fff; }
   .section-divider { border-top: 1px solid var(--rule); margin: 1.5rem 0 0.75rem; padding-top: 0.75rem; }
   .section-divider h2 { margin: 0 0 0.25rem; font-size: 1.1rem; }
   .help-text { color: var(--muted); font-size: 0.85rem; margin-top: 0.25rem; }
@@ -80,7 +93,11 @@
           <label>ORCID
             <input type="text" name="author_orcid" value="{{ a.orcid if a is mapping and a.orcid else '' }}" placeholder="0000-0000-0000-0000" />
           </label>
-          <button type="button" class="remove-btn" onclick="this.closest('.author-row').remove()">Remove</button>
+          <div class="row-actions">
+            <button type="button" class="up-btn" title="Move up">&uarr;</button>
+            <button type="button" class="down-btn" title="Move down">&darr;</button>
+            <button type="button" class="remove-btn" title="Remove this author">Remove</button>
+          </div>
         </div>
         {% endfor %}
       {% else %}
@@ -88,7 +105,11 @@
           <label>Name <span class="required">*</span><input type="text" name="author_name" required /></label>
           <label>Affiliation<input type="text" name="author_affiliation" /></label>
           <label>ORCID<input type="text" name="author_orcid" placeholder="0000-0000-0000-0000" /></label>
-          <button type="button" class="remove-btn" onclick="this.closest('.author-row').remove()">Remove</button>
+          <div class="row-actions">
+            <button type="button" class="up-btn" title="Move up">&uarr;</button>
+            <button type="button" class="down-btn" title="Move down">&darr;</button>
+            <button type="button" class="remove-btn" title="Remove this author">Remove</button>
+          </div>
         </div>
       {% endif %}
     </div>
@@ -117,6 +138,10 @@
       <label>Short authors (verso, even pages) <span class="required">*</span>
         <input type="text" name="short_authors" value="{{ fm.get('short-authors', '') }}" required />
         <span class="help-text">e.g., "Fernandes, Sano-Franchini, &amp; McIntyre"</span>
+      </label>
+      <label class="full">Footer text
+        <input type="text" name="footer" value="{{ fm.get('footer', '') }}" placeholder="e.g., Literacy in Composition Studies 13.1" />
+        <span class="help-text">Appears to the left of the centered page number. Leave blank for page number only.</span>
       </label>
       <label>Start page
         <input type="number" name="start_page" value="{{ fm.get('start-page', '') }}" min="1" />
@@ -156,15 +181,50 @@
     <label>Name <span class="required">*</span><input type="text" name="author_name" required /></label>
     <label>Affiliation<input type="text" name="author_affiliation" /></label>
     <label>ORCID<input type="text" name="author_orcid" placeholder="0000-0000-0000-0000" /></label>
-    <button type="button" class="remove-btn" onclick="this.closest('.author-row').remove()">Remove</button>
+    <div class="row-actions">
+      <button type="button" class="up-btn" title="Move up">&uarr;</button>
+      <button type="button" class="down-btn" title="Move down">&darr;</button>
+      <button type="button" class="remove-btn" title="Remove this author">Remove</button>
+    </div>
   </div>
 </template>
 
 <script>
+  const authorsList = document.getElementById('authors-list');
+
+  function refreshArrowStates() {
+    const rows = authorsList.querySelectorAll('.author-row');
+    rows.forEach((row, i) => {
+      row.querySelector('.up-btn').disabled = (i === 0);
+      row.querySelector('.down-btn').disabled = (i === rows.length - 1);
+    });
+  }
+
+  authorsList.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const row = btn.closest('.author-row');
+    if (!row) return;
+
+    if (btn.classList.contains('up-btn') && row.previousElementSibling) {
+      row.parentNode.insertBefore(row, row.previousElementSibling);
+    } else if (btn.classList.contains('down-btn') && row.nextElementSibling) {
+      row.parentNode.insertBefore(row.nextElementSibling, row);
+    } else if (btn.classList.contains('remove-btn')) {
+      row.remove();
+    } else {
+      return;
+    }
+    refreshArrowStates();
+  });
+
   document.getElementById('add-author-btn').addEventListener('click', () => {
     const tpl = document.getElementById('author-row-template');
     const clone = tpl.content.cloneNode(true);
-    document.getElementById('authors-list').appendChild(clone);
+    authorsList.appendChild(clone);
+    refreshArrowStates();
   });
+
+  refreshArrowStates();
 </script>
 {% endblock %}

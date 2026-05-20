@@ -17,6 +17,7 @@
 
 #let short-title-val = "$short-title$"
 #let short-authors-val = "$short-authors$"
+#let footer-val = "$footer$"
 
 // Drop cap helper. Typst doesn't natively wrap body text around a
 // floated initial (no shape-aware reflow), so this is a stylized
@@ -58,7 +59,9 @@
   footer: context {
     let p = counter(page).at(here()).first()
     if p == 1 { return [] }
-    align(center, text(size: 9.5pt, fill: ink-soft, str(p)))
+    let page-str = str(p)
+    let label = if footer-val != "" { footer-val + "  ·  " + page-str } else { page-str }
+    align(center, text(size: 9.5pt, fill: ink-soft, label))
   },
 )
 
