@@ -38,11 +38,60 @@ class CleanupLog:
 
 # ---------- individual passes ----------
 
+def _strip_class_wrapper(text: str, classname: str) -> tuple[str, int]:
+    """Strip `[...]{.classname}` wrappers, preserving the inner content.
+
+    Handles nested brackets and multi-line spans by walking backward from
+    each `]{.classname}` marker to find the matching `[`. Plain regex with
+    `[^\\[\\]]` can't do this because real-world highlights routinely
+    contain markdown links, internal `[bracket]` paraphrases, and span
+    multiple lines.
+    """
+    marker = "]{." + classname + "}"
+    out: list[str] = []
+    i = 0
+    count = 0
+    n = len(text)
+    while i < n:
+        close = text.find(marker, i)
+        if close == -1:
+            out.append(text[i:])
+            break
+        depth = 1
+        j = close - 1
+        while j >= i and depth > 0:
+            c = text[j]
+            if c == "]":
+                depth += 1
+            elif c == "[":
+                depth -= 1
+            j -= 1
+        if depth == 0:
+            open_pos = j + 1
+            inner = text[open_pos + 1: close]
+            out.append(text[i:open_pos])
+            out.append(inner)
+            i = close + len(marker)
+            count += 1
+        else:
+            out.append(text[i: close + len(marker)])
+            i = close + len(marker)
+    return "".join(out), count
+
+
 def strip_highlighter_spans(text: str, log: CleanupLog) -> str:
-    """`[text]{.mark}` -> `text`. Word's highlighter annotation."""
-    pattern = re.compile(r"\[([^\[\]\n]+?)\]\{\.mark\}")
-    new_text, count = pattern.subn(r"\1", text)
+    """Strip `[text]{.mark}` (Word highlighter annotation)."""
+    new_text, count = _strip_class_wrapper(text, "mark")
     log.record("strip_highlighter_spans", count)
+    return new_text
+
+
+def strip_underline_spans(text: str, log: CleanupLog) -> str:
+    """Strip `[text]{.underline}` (Word underline annotation, typically
+    wrapping a URL inside a markdown link). The link itself stays intact
+    and renders with the journal's link styling."""
+    new_text, count = _strip_class_wrapper(text, "underline")
+    log.record("strip_underline_spans", count)
     return new_text
 
 
@@ -323,6 +372,7 @@ Pass = Callable[[str, CleanupLog], str]
 
 DEFAULT_PASSES: List[Pass] = [
     strip_highlighter_spans,
+    strip_underline_spans,
     unescape_quoted_brackets,
     reassemble_heading_linebreaks,
     conservative_list_normalization,

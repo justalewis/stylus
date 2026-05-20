@@ -28,6 +28,35 @@ def test_strip_highlighter_spans_idempotent():
     assert once == twice
 
 
+def test_strip_highlighter_multiline():
+    """A real-world highlight spans multiple paragraphs of a works-cited entry."""
+    src = (
+        "[Alrayes, Yasser. \"Annotate to Educate: The Dual Life of a\n"
+        "Syrian Student & Data Annotator.\" *The Data Workers' Inquiry*,\n"
+        "2024, https://data-workers.org/yasser.]{.mark}\n"
+    )
+    out = cleanups.strip_highlighter_spans(src, _log())
+    assert "{.mark}" not in out
+    assert "Alrayes, Yasser" in out
+    assert "https://data-workers.org/yasser" in out
+
+
+def test_strip_highlighter_with_nested_brackets():
+    """A highlight wrapping a markdown link must preserve the link."""
+    src = "before [some text with [[url]{.underline}](http://x.test) link]{.mark} after"
+    out = cleanups.strip_highlighter_spans(src, _log())
+    assert "{.mark}" not in out
+    assert "[[url]{.underline}](http://x.test)" in out
+    assert "before " in out and " after" in out
+
+
+def test_strip_underline_spans():
+    src = "see [[https://example.org]{.underline}](https://example.org) for details"
+    out = cleanups.strip_underline_spans(src, _log())
+    assert "{.underline}" not in out
+    assert "[https://example.org](https://example.org)" in out
+
+
 def test_unescape_quoted_brackets():
     src = r"As Crawford notes, \[citation needed\]."
     out = cleanups.unescape_quoted_brackets(src, _log())

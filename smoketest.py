@@ -57,7 +57,13 @@ def main():
     print(f"  tracked changes present: {res.has_tracked_changes}")
 
     print("\n[Stage 2] Cleanups...")
-    cleaned = conversion.run_cleanups(apath)
+    cleaned = conversion.run_cleanups(
+        apath,
+        issue_metadata={
+            "short-title": "Against AI Empire",
+            "short-authors": "Fernandes, Sano-Franchini, & McIntyre",
+        },
+    )
     print(f"  cleaned: {cleaned}  ({cleaned.stat().st_size:,} bytes)")
 
     print("\n[Stage 4] Render...")

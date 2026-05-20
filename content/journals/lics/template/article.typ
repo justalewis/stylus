@@ -1,83 +1,171 @@
-// LiCS Pandoc Typst template.
+// LiCS Pandoc Typst template (classical typography, 6 x 9 book trim).
 //
-// Variables (`$name$`) are substituted by Pandoc using the article's YAML
-// front matter. The result is a `.typ` source file that Typst compiles
-// to a tagged PDF.
+// Mirrors the standalone HTML design: EB Garamond, cream paper feel
+// (but white print), small-caps centered section heads with a hairline
+// rule above, justified body with first-line indent, italic running
+// headers (verso = short-authors, recto = short-title), centered page
+// counter in the footer, first-page suppression of both, and a drop cap
+// on the first paragraph of the opening section.
+//
+// The drop cap is injected by the journal's Lua filter (typst output
+// path only); it wraps the first character of the first body paragraph
+// in `#dropcap[X]`. The helper below implements the visual treatment.
+
+#let ink = rgb("#1a1612")
+#let ink-soft = rgb("#4a4137")
+#let rule-color = rgb("#b6a98c")
+
+#let short-title-val = "$short-title$"
+#let short-authors-val = "$short-authors$"
+
+// Drop cap helper. Typst doesn't natively wrap body text around a
+// floated initial (no shape-aware reflow), so this is a stylized
+// initial: an oversized first letter that drops below the baseline,
+// with subsequent body flowing at full width to its right and below.
+// The visual effect approximates a scholarly-book opening even without
+// true wrap-around.
+#let dropcap(letter) = {
+  text(
+    size: 3.6em,
+    weight: 500,
+    baseline: 0.55em,
+    font: ("EB Garamond", "Garamond", "Georgia"),
+    [#letter]
+  )
+  h(0.05em)
+}
 
 #set document(
   $if(title)$title: "$title$",$endif$
-  $if(author)$author: ($for(author)$"$it.name$"$sep$, $endfor$),$endif$
+  $if(author)$author: ($for(author)$"$author.name$"$sep$, $endfor$),$endif$
   $if(keywords)$keywords: ($for(keywords)$"$keywords$"$sep$, $endfor$),$endif$
 )
 
 #set page(
   paper: "us-letter",
-  margin: (top: 1in, bottom: 1in, left: 1.25in, right: 1.25in),
+  width: 6in,
+  height: 9in,
+  margin: (top: 0.85in, bottom: 0.95in, left: 0.75in, right: 0.75in),
   header: context {
     let p = counter(page).at(here()).first()
-    if p == 1 {
-      []
-    } else if calc.even(p) {
-      align(left, text(size: 9pt, style: "italic", "$short-authors$"))
+    if p <= 1 { return [] }
+    if calc.even(p) {
+      align(left, text(style: "italic", size: 9.5pt, fill: ink-soft, short-authors-val))
     } else {
-      align(right, text(size: 9pt, style: "italic", "$short-title$"))
+      align(right, text(style: "italic", size: 9.5pt, fill: ink-soft, short-title-val))
     }
   },
-  footer: context align(center, text(size: 9pt, str(counter(page).at(here()).first()))),
+  footer: context {
+    let p = counter(page).at(here()).first()
+    if p == 1 { return [] }
+    align(center, text(size: 9.5pt, fill: ink-soft, str(p)))
+  },
 )
 
-#set text(font: ("EB Garamond", "Cormorant Garamond", "Georgia"), size: 11pt, lang: "en")
-#set par(justify: true, leading: 0.65em, first-line-indent: 1.5em)
+#set text(
+  font: ("EB Garamond", "Garamond", "Georgia"),
+  size: 11.25pt,
+  fill: ink,
+  lang: "en",
+  features: ("kern", "liga", "onum"),
+)
+#set par(
+  justify: true,
+  leading: 0.62em,
+  first-line-indent: 1.4em,
+  linebreaks: "optimized",
+)
 
+// Section-h1: centered small-caps with a hairline rule above
 #show heading.where(level: 1): it => {
-  set text(size: 16pt, weight: "bold")
-  set par(first-line-indent: 0em)
-  v(1.2em)
-  it.body
-  v(0.4em)
+  set par(first-line-indent: 0pt)
+  v(1.6em)
+  line(length: 100%, stroke: 0.5pt + rule-color)
+  v(0.6em)
+  align(center, text(
+    size: 10.5pt,
+    weight: 500,
+    tracking: 0.18em,
+    smallcaps(it.body),
+  ))
+  v(0.6em)
 }
+
+// Section-h2: italic, left-aligned
 #show heading.where(level: 2): it => {
-  set text(size: 13pt, weight: "bold", style: "italic")
-  set par(first-line-indent: 0em)
-  v(0.8em)
-  it.body
+  set par(first-line-indent: 0pt)
+  v(1em)
+  text(size: 12pt, style: "italic", weight: 400, it.body)
+  v(0.3em)
+}
+
+// Section-h3: italic, ink-soft, smaller
+#show heading.where(level: 3): it => {
+  set par(first-line-indent: 0pt)
+  v(0.7em)
+  text(size: 10.5pt, style: "italic", weight: 400, fill: ink-soft, it.body)
   v(0.2em)
 }
-#show heading.where(level: 3): it => {
-  set text(size: 11pt, weight: "bold")
-  set par(first-line-indent: 0em)
-  v(0.5em)
-  it.body
+
+// First paragraph after a heading: no indent
+#show heading: it => {
+  it
+  set par(first-line-indent: 0pt)
 }
 
-// Title block
-align(center, {
-  set par(first-line-indent: 0em)
-  text(size: 18pt, weight: "bold", "$title$")
+// Blockquotes: smaller, indented, no border
+#show quote.where(block: true): it => {
+  set par(first-line-indent: 0pt, leading: 0.6em)
+  v(0.6em)
+  pad(left: 1.5em, right: 1em, text(size: 10pt, it.body))
+  v(0.6em)
+}
+
+// Links: subtle, ink color (no underline noise in print)
+#show link: it => text(fill: rgb("#5a3a1f"), it)
+
+// ---------- Title page ----------
+
+#align(center, {
+  set par(first-line-indent: 0pt)
+  v(0.4in)
+  text(size: 22pt, weight: 500, [$title$])
   $if(subtitle)$
   v(0.4em)
-  text(size: 13pt, style: "italic", "$subtitle$")
-  $endif$
-  v(0.8em)
-  $if(author)$
-  text(size: 11pt, style: "italic", $for(author)$"$author.name$$if(author.affiliation)$ ($author.affiliation$)$endif$"$sep$ + ", " + $endfor$)
+  text(size: 14pt, style: "italic", fill: ink-soft, [$subtitle$])
   $endif$
   v(1.2em)
+  $for(author)$
+  text(style: "italic", size: 11pt, fill: ink-soft, [$author.name$$if(author.affiliation)$ \u{2014} $author.affiliation$$endif$])
+  linebreak()
+  $endfor$
+  v(0.6em)
+  line(length: 40%, stroke: 0.5pt + rule-color)
+  v(0.8em)
 })
 
-$if(abstract)$
-block(
-  inset: (left: 1em, right: 1em, top: 0.5em, bottom: 0.5em),
-  stroke: (top: 0.5pt, bottom: 0.5pt),
-  width: 100%,
-  [
-    #set par(first-line-indent: 0em)
-    #text(size: 10pt, weight: "bold", "Abstract")
-    #v(0.3em)
-    #text(size: 10pt, [$abstract$])
-  ],
-)
-v(0.8em)
+$if(keywords)$
+#align(center, block(width: 80%, {
+  set par(first-line-indent: 0pt)
+  text(size: 8pt, tracking: 0.22em, fill: ink-soft, smallcaps("Keywords"))
+  v(0.3em)
+  text(style: "italic", size: 9.5pt, fill: ink-soft, [$for(keywords)$$keywords$$sep$; $endfor$])
+}))
+#v(0.6em)
 $endif$
+
+$if(abstract)$
+#align(center, block(width: 85%, {
+  set par(first-line-indent: 0pt, justify: true, leading: 0.6em)
+  text(size: 8pt, tracking: 0.22em, fill: ink-soft, smallcaps("Abstract"))
+  v(0.4em)
+  text(size: 9.75pt, [$abstract$])
+}))
+#v(1em)
+$endif$
+
+#pagebreak()
+
+// ---------- Body ----------
 
 $body$

@@ -251,9 +251,12 @@ def render_pdf(article_path: Path, journal_slug: str) -> Path:
     out = article_path / "article.pdf"
     tpl = template_dir(journal_slug)
     typ_template = tpl / "article.typ"
+    lua_filter = tpl / "lics-filter.lua"
     typst_input = article_path / "article.typ"
 
     extra = [f"--template={typ_template}"]
+    if lua_filter.exists():
+        extra.append(f"--lua-filter={lua_filter}")
     pypandoc.convert_file(
         str(md),
         to="typst",

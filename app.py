@@ -101,10 +101,15 @@ def register_routes(app: Flask):
             f = request.files.get("docx")
             slug_override = request.form.get("slug", "").strip()
             title_hint = request.form.get("title", "").strip()
+            short_title = request.form.get("short_title", "").strip()
+            short_authors = request.form.get("short_authors", "").strip()
             accept_tc = request.form.get("track_changes", "accept") == "accept"
 
             if not f or not f.filename:
                 flash("No file uploaded.", "error")
+                return redirect(request.url)
+            if not short_title or not short_authors:
+                flash("Short title and short authors are required for running headers.", "error")
                 return redirect(request.url)
 
             filename = secure_filename(f.filename)
@@ -127,7 +132,13 @@ def register_routes(app: Flask):
 
             try:
                 conversion.ingest_docx(staged, apath, accept_track_changes=accept_tc)
-                conversion.run_cleanups(apath)
+                conversion.run_cleanups(
+                    apath,
+                    issue_metadata={
+                        "short-title": short_title,
+                        "short-authors": short_authors,
+                    },
+                )
             except Exception as exc:
                 flash(f"Conversion failed: {exc}", "error")
                 return redirect(request.url)
