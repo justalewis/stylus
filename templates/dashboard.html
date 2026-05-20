@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Dashboard | LiCS Pipeline{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Journals</h1>
+  {% if journals %}
+  <ul class="journal-list">
+    {% for j in journals %}
+    <li>
+      <a href="{{ url_for('journal_home', slug=j['slug']) }}"><strong>{{ j['name'] }}</strong></a>
+      <span class="dim">{{ j['issn'] or '' }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="dim">No journals registered. Run <code>python seed.py</code>.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Recent articles</h2>
+  {% if recent %}
+  <table class="data">
+    <thead><tr><th>Title</th><th>Journal</th><th>Status</th><th>Updated</th></tr></thead>
+    <tbody>
+      {% for a in recent %}
+      <tr>
+        <td><a href="{{ url_for('article_home', article_id=a['id']) }}">{{ a['title'] }}</a></td>
+        <td>{{ a['journal_name'] }}</td>
+        <td><span class="badge status-{{ a['status'] }}">{{ a['status'] }}</span></td>
+        <td class="dim">{{ a['updated_at'] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="dim">No articles yet. Pick a journal and upload a DOCX.</p>
+  {% endif %}
+</section>
+{% endblock %}

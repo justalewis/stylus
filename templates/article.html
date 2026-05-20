@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ article['title'] }} | LiCS Pipeline{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>{{ article['title'] }}</h1>
+  <p class="dim">
+    <code>{{ article['journal_slug'] }}/{{ article['slug'] }}</code>
+    &middot; status: <span class="badge status-{{ article['status'] }}">{{ article['status'] }}</span>
+  </p>
+  <nav class="action-row">
+    <a class="button" href="{{ url_for('article_edit', article_id=article['id']) }}">Edit Markdown</a>
+    <button class="button" id="render-btn" data-href="{{ url_for('article_render', article_id=article['id']) }}">Render</button>
+    {% if rendered_html %}<a class="button ghost" href="{{ url_for('serve_html', article_id=article['id']) }}" target="_blank">View HTML</a>{% endif %}
+    {% if rendered_pdf %}<a class="button ghost" href="{{ url_for('serve_pdf', article_id=article['id']) }}" target="_blank">View PDF</a>{% endif %}
+  </nav>
+  <div id="render-status" class="dim"></div>
+</section>
+
+<section class="card">
+  <h2>Conversion log</h2>
+  <pre class="log">{{ log_text }}</pre>
+</section>
+
+<script>
+  const btn = document.getElementById('render-btn');
+  const status = document.getElementById('render-status');
+  if (btn) {
+    btn.addEventListener('click', async () => {
+      status.textContent = 'Rendering...';
+      btn.disabled = true;
+      try {
+        const r = await fetch(btn.dataset.href, { method: 'POST' });
+        const data = await r.json();
+        if (data.errors && data.errors.length) {
+          status.innerHTML = '<strong>Errors:</strong> ' + data.errors.map(e => `<div>${e}</div>`).join('');
+        } else {
+          status.textContent = 'Done. Reloading...';
+          location.reload();
+        }
+      } catch (e) {
+        status.textContent = 'Render request failed: ' + e;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+</script>
+{% endblock %}

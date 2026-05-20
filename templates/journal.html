@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ journal['name'] }} | LiCS Pipeline{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>{{ journal['name'] }}</h1>
+  <p class="dim">slug: <code>{{ journal['slug'] }}</code> &middot; ISSN: {{ journal['issn'] or '—' }}</p>
+  <p>
+    <a class="button" href="{{ url_for('upload_article', slug=journal['slug']) }}">Upload new DOCX</a>
+  </p>
+</section>
+
+<section class="card">
+  <h2>Articles</h2>
+  {% if articles %}
+  <table class="data">
+    <thead><tr><th>Title</th><th>Slug</th><th>Status</th><th>Updated</th></tr></thead>
+    <tbody>
+      {% for a in articles %}
+      <tr>
+        <td><a href="{{ url_for('article_home', article_id=a['id']) }}">{{ a['title'] }}</a></td>
+        <td><code>{{ a['slug'] }}</code></td>
+        <td><span class="badge status-{{ a['status'] }}">{{ a['status'] }}</span></td>
+        <td class="dim">{{ a['updated_at'] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="dim">No articles yet for this journal.</p>
+  {% endif %}
+</section>
+{% endblock %}

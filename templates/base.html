@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}LiCS Pipeline{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><a href="{{ url_for('dashboard') }}">LiCS Pipeline</a></div>
+    {% if current_user.is_authenticated %}
+    <nav>
+      <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      <span class="who">{{ current_user.username }}</span>
+      <a href="{{ url_for('logout') }}">Sign out</a>
+    </nav>
+    {% endif %}
+  </header>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <ul class="flashes">
+      {% for category, msg in messages %}
+      <li class="flash flash-{{ category }}">{{ msg }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  {% endwith %}
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="bottom">
+    <small>Source: filesystem. Index: SQLite. Engine: Pandoc + Typst.</small>
+  </footer>
+</body>
+</html>

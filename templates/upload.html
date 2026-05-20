@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Upload | {{ journal['name'] }}{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>Upload article</h1>
+  <p class="dim">Journal: {{ journal['name'] }}</p>
+  <form method="post" enctype="multipart/form-data" class="stack">
+    <label>DOCX file
+      <input type="file" name="docx" accept=".docx" required />
+    </label>
+    <label>Slug (optional; derived from filename if blank)
+      <input type="text" name="slug" placeholder="fernandes-sano-franchini-mcintyre-2026" />
+    </label>
+    <label>Title hint (optional)
+      <input type="text" name="title" placeholder="(leave blank to use the title from front matter)" />
+    </label>
+    <fieldset>
+      <legend>Tracked changes</legend>
+      <label><input type="radio" name="track_changes" value="accept" checked /> Accept all</label>
+      <label><input type="radio" name="track_changes" value="reject" /> Reject all</label>
+    </fieldset>
+    <button type="submit">Ingest and clean</button>
+  </form>
+</section>
+{% endblock %}

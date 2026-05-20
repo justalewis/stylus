@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Edit | {{ article['title'] }}{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/theme/idea.css" />
+<style>
+  .editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; height: calc(100vh - 12rem); }
+  .editor-pane, .preview-pane { border: 1px solid #d0c8b6; border-radius: 6px; overflow: hidden; background: #fffdf7; }
+  .CodeMirror { height: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; }
+  .preview-pane { padding: 1.5rem 2rem; overflow-y: auto; line-height: 1.55; font-family: Georgia, serif; }
+  .preview-pane h1, .preview-pane h2 { color: #613c3b; }
+  .editor-toolbar { display:flex; gap:0.5rem; align-items:center; padding: 0.5rem 0 1rem; }
+  .save-status { margin-left: auto; color: #555; font-size: 0.9rem; }
+</style>
+{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Editing: {{ article['title'] }}</h1>
+  <div class="editor-toolbar">
+    <button class="button" id="save-btn">Save</button>
+    <a class="button ghost" href="{{ url_for('article_home', article_id=article['id']) }}">Back</a>
+    <span class="save-status" id="save-status"></span>
+  </div>
+  <div class="editor-grid">
+    <div class="editor-pane">
+      <textarea id="md-editor">{{ md_text }}</textarea>
+    </div>
+    <div class="preview-pane" id="preview"></div>
+  </div>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/markdown/markdown.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/yaml/yaml.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/yaml-frontmatter/yaml-frontmatter.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+  const ta = document.getElementById('md-editor');
+  const cm = CodeMirror.fromTextArea(ta, {
+    mode: { name: "yaml-frontmatter", base: "markdown" },
+    lineNumbers: true,
+    lineWrapping: true,
+    theme: "idea",
+    indentUnit: 2,
+  });
+
+  const preview = document.getElementById('preview');
+  function stripFrontMatter(text) {
+    if (text.startsWith('---\n')) {
+      const end = text.indexOf('\n---', 4);
+      if (end !== -1) return text.slice(end + 4).replace(/^\n+/, '');
+    }
+    return text;
+  }
+  function renderPreview() {
+    preview.innerHTML = marked.parse(stripFrontMatter(cm.getValue()));
+  }
+  cm.on('change', () => { renderPreview(); });
+  renderPreview();
+
+  const saveBtn = document.getElementById('save-btn');
+  const saveStatus = document.getElementById('save-status');
+  saveBtn.addEventListener('click', async () => {
+    saveStatus.textContent = 'Saving...';
+    saveBtn.disabled = true;
+    try {
+      const r = await fetch(window.location.pathname, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: cm.getValue() }),
+      });
+      const data = await r.json();
+      saveStatus.textContent = data.ok ? `Saved (${data.bytes} bytes)` : 'Save failed';
+    } catch (e) {
+      saveStatus.textContent = 'Save failed: ' + e;
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      e.preventDefault();
+      saveBtn.click();
+    }
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="$lang$" xml:lang="$lang$">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>$title$ | Literacy in Composition Studies</title>
+  $for(css)$
+  <link rel="stylesheet" href="$css$" />
+  $endfor$
+  $for(author-meta)$
+  <meta name="author" content="$author-meta$" />
+  $endfor$
+  $if(keywords)$
+  <meta name="keywords" content="$for(keywords)$$keywords$$sep$, $endfor$" />
+  $endif$
+  $if(doi)$
+  <meta name="citation_doi" content="$doi$" />
+  $endif$
+  $if(journal)$
+  <meta name="citation_journal_title" content="$journal$" />
+  $endif$
+  $if(volume)$
+  <meta name="citation_volume" content="$volume$" />
+  $endif$
+  $if(issue)$
+  <meta name="citation_issue" content="$issue$" />
+  $endif$
+</head>
+<body>
+<article class="ojs-article-frame">
+  <header class="article-header">
+    <h1 class="article-title">$title$</h1>
+    $if(subtitle)$<p class="article-subtitle">$subtitle$</p>$endif$
+    $if(author)$
+    <div class="article-authors">
+      $for(author)$
+      <span class="author">
+        <span class="author-name">$author.name$</span>$if(author.affiliation)$<span class="author-affiliation"> &mdash; $author.affiliation$</span>$endif$
+      </span>$sep$<span class="author-sep">, </span>
+      $endfor$
+    </div>
+    $endif$
+  </header>
+
+  $if(abstract)$
+  <aside class="abstract">
+    <h2 class="abstract-heading">Abstract</h2>
+    $abstract$
+  </aside>
+  $endif$
+
+  $if(keywords)$
+  <aside class="keywords">
+    <h2 class="keywords-heading">Keywords</h2>
+    <p>$for(keywords)$$keywords$$sep$; $endfor$</p>
+  </aside>
+  $endif$
+
+  <div class="article-body">
+$body$
+  </div>
+</article>
+</body>
+</html>

@@ -1,0 +1,11 @@
+flask>=3.0
+flask-login>=0.6.3
+pypandoc>=1.13
+python-docx>=1.1
+pyyaml>=6.0
+mistune>=3.0
+lxml>=5.0
+requests>=2.32
+typst>=0.13
+html5validator>=0.4
+werkzeug>=3.0

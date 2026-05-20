@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+data/*.db
+data/*.db-journal
+# Generated article artifacts (anywhere under content/journals/<slug>/...)
+content/**/article-raw.md
+content/**/article.html
+content/**/article.pdf
+content/**/article.typ
+content/**/conversion.log
+content/**/.versions/
+content/**/source.docx
+content/**/assets/
+# Issue-level artifacts
+content/**/issue.pdf
+content/**/issue-toc.json
+# Hold-out article directories (uploads not yet committed; canonical article.md will be committed when ready)
+content/**/_unfiled/
+_dropbox/
+*.log
+.DS_Store
+.vscode/
+.idea/
