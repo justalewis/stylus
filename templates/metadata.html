@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Metadata | {{ article['title'] }}{% endblock %}
+{% block head %}
+<style>
+  .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem 1.5rem; }
+  .field-grid .full { grid-column: 1 / -1; }
+  .author-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr auto;
+    gap: 0.5rem;
+    align-items: end;
+    margin-bottom: 0.5rem;
+    padding: 0.5rem;
+    border: 1px dashed var(--rule);
+    border-radius: 4px;
+    background: #fffdf7;
+  }
+  .author-row .remove-btn {
+    background: transparent;
+    color: var(--warn);
+    border: 1px solid var(--warn);
+    padding: 0.35rem 0.6rem;
+  }
+  .author-row .remove-btn:hover { background: var(--warn); color: #fff; }
+  .section-divider { border-top: 1px solid var(--rule); margin: 1.5rem 0 0.75rem; padding-top: 0.75rem; }
+  .section-divider h2 { margin: 0 0 0.25rem; font-size: 1.1rem; }
+  .help-text { color: var(--muted); font-size: 0.85rem; margin-top: 0.25rem; }
+  textarea { width: 100%; min-height: 8rem; padding: 0.5rem 0.65rem; font: inherit; border: 1px solid var(--rule); border-radius: 4px; background: #fff; }
+  .required { color: var(--warn); }
+</style>
+{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Edit metadata</h1>
+  <p class="dim">
+    <code>{{ article['journal_slug'] }}/{{ article['slug'] }}</code>
+    &middot; <a href="{{ url_for('article_home', article_id=article['id']) }}">Back to article</a>
+    &middot; <a href="{{ url_for('article_edit', article_id=article['id']) }}">Edit Markdown body</a>
+  </p>
+
+  <form method="post" class="stack">
+    <div class="section-divider">
+      <h2>Identification</h2>
+    </div>
+    <div class="field-grid">
+      <label class="full">Title <span class="required">*</span>
+        <input type="text" name="title" value="{{ fm.get('title', '') }}" required />
+      </label>
+      <label class="full">Subtitle
+        <input type="text" name="subtitle" value="{{ fm.get('subtitle', '') }}" />
+      </label>
+      <label>DOI
+        <input type="text" name="doi" value="{{ fm.get('doi', '') }}" placeholder="10.xxxxx/xxxxx" />
+      </label>
+      <label>Status
+        <select name="status">
+          {% set current_status = fm.get('status', 'draft') %}
+          <option value="draft"     {% if current_status == 'draft' %}selected{% endif %}>draft</option>
+          <option value="revising"  {% if current_status == 'revising' %}selected{% endif %}>revising</option>
+          <option value="final"     {% if current_status == 'final' %}selected{% endif %}>final</option>
+          <option value="published" {% if current_status == 'published' %}selected{% endif %}>published</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="section-divider">
+      <h2>Authors</h2>
+      <p class="help-text">Listed in publication order. Drag the rows to reorder is not supported yet; remove and re-add to change order.</p>
+    </div>
+    <div id="authors-list">
+      {% if authors %}
+        {% for a in authors %}
+        <div class="author-row">
+          <label>Name <span class="required">*</span>
+            <input type="text" name="author_name" value="{{ a.name if a is mapping else a }}" required />
+          </label>
+          <label>Affiliation
+            <input type="text" name="author_affiliation" value="{{ a.affiliation if a is mapping and a.affiliation else '' }}" />
+          </label>
+          <label>ORCID
+            <input type="text" name="author_orcid" value="{{ a.orcid if a is mapping and a.orcid else '' }}" placeholder="0000-0000-0000-0000" />
+          </label>
+          <button type="button" class="remove-btn" onclick="this.closest('.author-row').remove()">Remove</button>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="author-row">
+          <label>Name <span class="required">*</span><input type="text" name="author_name" required /></label>
+          <label>Affiliation<input type="text" name="author_affiliation" /></label>
+          <label>ORCID<input type="text" name="author_orcid" placeholder="0000-0000-0000-0000" /></label>
+          <button type="button" class="remove-btn" onclick="this.closest('.author-row').remove()">Remove</button>
+        </div>
+      {% endif %}
+    </div>
+    <button type="button" class="button ghost small" id="add-author-btn">+ Add author</button>
+
+    <div class="section-divider">
+      <h2>Content</h2>
+    </div>
+    <label class="full">Abstract
+      <textarea name="abstract">{{ fm.get('abstract', '') }}</textarea>
+    </label>
+    <label>Keywords
+      <input type="text" name="keywords" value="{{ keywords_str }}" placeholder="ai empire; critwashing; data work" />
+      <span class="help-text">Separate with commas or semicolons.</span>
+    </label>
+
+    <div class="section-divider">
+      <h2>Running headers &amp; pagination</h2>
+      <p class="help-text">Shown in the page header of the PDF. The first page has no header.</p>
+    </div>
+    <div class="field-grid">
+      <label>Short title (recto, odd pages) <span class="required">*</span>
+        <input type="text" name="short_title" value="{{ fm.get('short-title', '') }}" required />
+        <span class="help-text">Suggested: under 50 characters.</span>
+      </label>
+      <label>Short authors (verso, even pages) <span class="required">*</span>
+        <input type="text" name="short_authors" value="{{ fm.get('short-authors', '') }}" required />
+        <span class="help-text">e.g., "Fernandes, Sano-Franchini, &amp; McIntyre"</span>
+      </label>
+      <label>Start page
+        <input type="number" name="start_page" value="{{ fm.get('start-page', '') }}" min="1" />
+        <span class="help-text">Optional. Set when assembling an issue with continuous pagination.</span>
+      </label>
+    </div>
+
+    <div class="section-divider">
+      <h2>Issue assignment (advanced)</h2>
+      <p class="help-text">Usually inherited from the issue; override only if needed.</p>
+    </div>
+    <div class="field-grid">
+      <label>Journal name
+        <input type="text" name="journal" value="{{ fm.get('journal', '') }}" />
+      </label>
+      <label>Volume
+        <input type="text" name="volume" value="{{ fm.get('volume', '') }}" />
+      </label>
+      <label>Issue
+        <input type="text" name="issue" value="{{ fm.get('issue', '') }}" />
+      </label>
+      <label>Year
+        <input type="text" name="year" value="{{ fm.get('year', '') }}" />
+      </label>
+    </div>
+
+    <div class="section-divider"></div>
+    <div>
+      <button type="submit">Save metadata</button>
+      <a class="button ghost" href="{{ url_for('article_home', article_id=article['id']) }}">Cancel</a>
+    </div>
+  </form>
+</section>
+
+<template id="author-row-template">
+  <div class="author-row">
+    <label>Name <span class="required">*</span><input type="text" name="author_name" required /></label>
+    <label>Affiliation<input type="text" name="author_affiliation" /></label>
+    <label>ORCID<input type="text" name="author_orcid" placeholder="0000-0000-0000-0000" /></label>
+    <button type="button" class="remove-btn" onclick="this.closest('.author-row').remove()">Remove</button>
+  </div>
+</template>
+
+<script>
+  document.getElementById('add-author-btn').addEventListener('click', () => {
+    const tpl = document.getElementById('author-row-template');
+    const clone = tpl.content.cloneNode(true);
+    document.getElementById('authors-list').appendChild(clone);
+  });
+</script>
+{% endblock %}

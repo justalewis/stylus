@@ -124,6 +124,8 @@ table.data tr:hover td { background: var(--accent-soft); }
 .journal-list li:last-child { border-bottom: 0; }
 .journal-list a { color: var(--fg); text-decoration: none; }
 .journal-list a:hover { color: var(--accent); }
+.journal-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.button.small { padding: 0.3rem 0.7rem; font-size: 0.88rem; }
 
 .badge {
   display: inline-block;

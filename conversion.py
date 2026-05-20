@@ -201,6 +201,80 @@ def save_markdown(article_path: Path, new_text: str, note: str = "manual edit"):
     _append_log(article_path, "Stage 3: editor save", f"note: {note}\nbytes: {len(new_text)}")
 
 
+# ---------- metadata helpers ----------
+
+# Canonical YAML field order. Keys outside this list are appended after.
+_FIELD_ORDER = (
+    "title", "subtitle",
+    "author",
+    "abstract",
+    "keywords",
+    "short-title", "short-authors",
+    "doi",
+    "journal", "issn", "volume", "issue", "year",
+    "start-page", "end-page",
+    "submitted-date", "accepted-date", "published-date",
+    "copyright",
+    "status",
+)
+
+
+def read_article_metadata(article_path: Path) -> tuple[dict, str]:
+    """Return (front_matter_dict, body_string) from article.md.
+
+    If no YAML front matter is present, returns ({}, full_text).
+    """
+    import yaml
+    md_path = article_path / "article.md"
+    text = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
+    if not text.startswith("---\n"):
+        return {}, text
+    end = text.find("\n---", 4)
+    if end == -1:
+        return {}, text
+    raw = text[4:end]
+    body_start = end + len("\n---")
+    if text[body_start:body_start + 1] == "\n":
+        body_start += 1
+    try:
+        fm = yaml.safe_load(raw) or {}
+    except Exception:
+        fm = {}
+    return fm, text[body_start:]
+
+
+def write_article_metadata(article_path: Path, fm: dict, body: str | None = None):
+    """Write article.md with the given front matter and body. Snapshots first.
+
+    If `body` is None, preserves the current body. Field order is canonical
+    (title first, then authors, etc.) so files diff cleanly between saves.
+    """
+    import yaml
+    if body is None:
+        _, body = read_article_metadata(article_path)
+
+    ordered: dict = {}
+    for k in _FIELD_ORDER:
+        if k in fm and fm[k] not in (None, "", []):
+            ordered[k] = fm[k]
+    for k, v in fm.items():
+        if k not in ordered and v not in (None, "", []):
+            ordered[k] = v
+
+    yaml_text = yaml.safe_dump(
+        ordered, sort_keys=False, allow_unicode=True, width=10_000, default_flow_style=False
+    )
+    out_text = f"---\n{yaml_text}---\n\n{body.lstrip(chr(10))}"
+
+    _snapshot_version(article_path)
+    (article_path / "article.md").write_text(out_text, encoding="utf-8")
+    _append_log(
+        article_path,
+        "Stage 3: metadata save",
+        f"fields: {', '.join(ordered.keys())}\nbytes: {len(out_text)}",
+    )
+
+
 # ---------- Stage 4: render ----------
 
 @dataclass

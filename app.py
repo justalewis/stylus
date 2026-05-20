@@ -181,6 +181,111 @@ def register_routes(app: Flask):
             rendered_pdf=rendered_pdf,
         )
 
+    @app.route("/articles/<int:article_id>/metadata", methods=["GET", "POST"])
+    @login_required
+    def article_metadata(article_id):
+        article = db.query_one(
+            "SELECT a.*, j.slug AS journal_slug, j.name AS journal_name "
+            "FROM articles a JOIN journals j ON a.journal_id = j.id WHERE a.id = ?",
+            (article_id,),
+        )
+        if not article:
+            abort(404)
+        apath = Path(article["project_path"])
+        fm, body = conversion.read_article_metadata(apath)
+
+        if request.method == "POST":
+            updated = dict(fm)
+            for key in (
+                "title", "subtitle", "short-title", "short-authors",
+                "doi", "abstract", "status", "copyright",
+                "journal", "volume", "issue", "year",
+            ):
+                form_key = key.replace("-", "_")
+                val = request.form.get(form_key, "").strip()
+                if val:
+                    updated[key] = val
+                else:
+                    updated.pop(key, None)
+
+            page = request.form.get("start_page", "").strip()
+            if page:
+                try:
+                    updated["start-page"] = int(page)
+                except ValueError:
+                    flash("Start page must be a number.", "error")
+                    return redirect(request.url)
+            else:
+                updated.pop("start-page", None)
+
+            kw_raw = request.form.get("keywords", "").strip()
+            if kw_raw:
+                updated["keywords"] = [
+                    k.strip() for k in kw_raw.replace(";", ",").split(",") if k.strip()
+                ]
+            else:
+                updated.pop("keywords", None)
+
+            author_names = request.form.getlist("author_name")
+            author_affils = request.form.getlist("author_affiliation")
+            author_orcids = request.form.getlist("author_orcid")
+            authors: list[dict] = []
+            for i, name in enumerate(author_names):
+                name = (name or "").strip()
+                if not name:
+                    continue
+                rec: dict = {"name": name}
+                aff = (author_affils[i] if i < len(author_affils) else "").strip()
+                if aff:
+                    rec["affiliation"] = aff
+                orcid = (author_orcids[i] if i < len(author_orcids) else "").strip()
+                if orcid:
+                    rec["orcid"] = orcid
+                authors.append(rec)
+            if authors:
+                updated["author"] = authors
+            else:
+                updated.pop("author", None)
+
+            if not updated.get("title"):
+                flash("Title is required.", "error")
+                return redirect(request.url)
+            if not updated.get("short-title") or not updated.get("short-authors"):
+                flash("Short title and short authors are required for running headers.", "error")
+                return redirect(request.url)
+
+            conversion.write_article_metadata(apath, updated, body)
+            if updated.get("title") != article["title"]:
+                db.execute(
+                    "UPDATE articles SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (updated["title"], article_id),
+                )
+            else:
+                db.execute(
+                    "UPDATE articles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (article_id,),
+                )
+            flash("Metadata saved. Re-render to update HTML/PDF.", "success")
+            return redirect(url_for("article_home", article_id=article_id))
+
+        kw_string = ""
+        if isinstance(fm.get("keywords"), list):
+            kw_string = "; ".join(fm["keywords"])
+        elif fm.get("keywords"):
+            kw_string = str(fm["keywords"])
+
+        authors_list = fm.get("author") or []
+        if isinstance(authors_list, dict):
+            authors_list = [authors_list]
+
+        return render_template(
+            "metadata.html",
+            article=article,
+            fm=fm,
+            authors=authors_list,
+            keywords_str=kw_string,
+        )
+
     @app.route("/articles/<int:article_id>/edit", methods=["GET", "POST"])
     @login_required
     def article_edit(article_id):

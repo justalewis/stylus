@@ -6,9 +6,12 @@
   {% if journals %}
   <ul class="journal-list">
     {% for j in journals %}
-    <li>
-      <a href="{{ url_for('journal_home', slug=j['slug']) }}"><strong>{{ j['name'] }}</strong></a>
-      <span class="dim">{{ j['issn'] or '' }}</span>
+    <li class="journal-row">
+      <div>
+        <a href="{{ url_for('journal_home', slug=j['slug']) }}"><strong>{{ j['name'] }}</strong></a>
+        <span class="dim">{{ j['issn'] or '' }}</span>
+      </div>
+      <a class="button ghost small" href="{{ url_for('upload_article', slug=j['slug']) }}">Upload DOCX</a>
     </li>
     {% endfor %}
   </ul>
