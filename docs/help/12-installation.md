@@ -41,7 +41,7 @@ You should see `pandoc 3.x.x` or higher.
 ## Cloning and installing
 
 ```bash
-git clone https://github.com/justalewis/stylus.git
+git clone https://github.com/justalewis/graphion.git
 cd stylus
 python -m pip install -r requirements.txt
 ```

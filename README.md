@@ -59,7 +59,7 @@ Typst, pypdfium2, bibtexparser, and friends install via pip.
 ### Install
 
 ```bash
-git clone https://github.com/justalewis/stylus.git
+git clone https://github.com/justalewis/graphion.git
 cd stylus
 pip install -r requirements.txt
 ```
