@@ -174,6 +174,131 @@ _LIST_CUE_RE = re.compile(
 )
 
 
+_WORKS_CITED_HEADING_RE = re.compile(
+    # Match either a Markdown heading ("# Works Cited") or a bare line
+    # ("Works Cited" on its own). Pandoc doesn't always promote Word's
+    # works-cited paragraph to a heading if the author didn't style it.
+    r"^(?:#{1,6}\s+)?(works cited|references|bibliography)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _ensure_works_cited_heading(text: str) -> str:
+    """If `Works Cited` (or References / Bibliography) appears as a bare
+    line, promote it to an H1 so downstream rendering treats it as a
+    section. Idempotent."""
+    def _promote(m: re.Match) -> str:
+        existing = m.group(0)
+        if existing.lstrip().startswith("#"):
+            return existing
+        return "# " + m.group(1)
+    return _WORKS_CITED_HEADING_RE.sub(_promote, text)
+
+
+# Strong signals that a paragraph IS the start of a new citation entry.
+# Anything not matching these (and following a paragraph that doesn't end
+# in clear terminal punctuation) is treated as a continuation.
+_NEW_ENTRY_RE = re.compile(
+    r"^\s*("
+    r"---\.|—\.|--\."                                              # MLA same-author dash
+    r"|\"[A-Z]|“[A-Z]|'[A-Z]|‘[A-Z]"                     # Quoted title (anonymous works)
+    r"|[A-Z][\w'\-]+,\s+[A-Z]"                                     # `Surname, First` (most MLA)
+    r"|[A-Z][\w'\-]+\s+[A-Z][\w'\-]+,\s+[A-Z]"                     # `Two-word Surname, First`
+    r"|\*[A-Z]"                                                    # *Italic title* (title-led entry; ambiguous, see check below)
+    r")"
+)
+
+
+def unfragment_works_cited(text: str, log: CleanupLog) -> str:
+    """Merge fragmented Works Cited entries back into single paragraphs.
+
+    Word's "Enter" between visually-hanging-indent citation lines gets
+    converted to Markdown paragraph breaks by Pandoc, fragmenting one
+    citation across many paragraphs. Indented continuations also come
+    through as Markdown blockquotes (`>` prefix).
+
+    Heuristic: in the Works Cited section, a paragraph is a continuation
+    of the prior entry unless it (a) matches a strong "new entry" pattern
+    AND (b) the prior entry ends in terminal punctuation. Both conditions
+    must hold for a break to be preserved.
+
+    Stops at the next heading or footnote definition.
+    """
+    # Make sure "Works Cited" is a heading so downstream styling and
+    # this function's own search can recognize the section boundary.
+    text = _ensure_works_cited_heading(text)
+
+    m = _WORKS_CITED_HEADING_RE.search(text)
+    if not m:
+        return text
+
+    head_end = m.end()
+    head = text[:head_end]
+    body = text[head_end:]
+
+    stop_match = re.search(r"\n(#{1,6}\s|\[\^[^\]]+\]:)", body)
+    if stop_match:
+        body_section = body[:stop_match.start() + 1]
+        tail = body[stop_match.start() + 1:]
+    else:
+        body_section = body
+        tail = ""
+
+    paragraphs = [p.strip() for p in re.split(r"\n\n+", body_section) if p.strip()]
+
+    def starts_new_entry(s: str) -> bool:
+        s = re.sub(r"^>\s*", "", s).strip()
+        return bool(_NEW_ENTRY_RE.match(s))
+
+    def ends_terminally(s: str) -> bool:
+        s = s.rstrip().rstrip("*").rstrip()  # ignore trailing italic close
+        if not s:
+            return True
+        if s[-1] in ".!?)":
+            return True
+        # Markdown angle-bracket URL close: `<https://...>`
+        if s.endswith(">"):
+            return True
+        # Citation ending with a bare URL (Pandoc converts to Markdown link
+        # but the visible content is the URL)
+        if re.search(r"https?://[\w./?#\-=&%_]+$", s):
+            return True
+        return False
+
+    merged: list[str] = []
+    current: list[str] = []
+    merge_count = 0
+    for p in paragraphs:
+        # Strip leading blockquote prefix lines so the merged citation is clean
+        clean = re.sub(r"^>\s*", "", p, flags=re.MULTILINE).strip()
+
+        if not current:
+            current = [clean]
+            continue
+
+        prior = current[-1] if current else ""
+        prior_terminal = ends_terminally(" ".join(current))
+        is_new = starts_new_entry(clean)
+
+        if is_new and prior_terminal:
+            merged.append(" ".join(current))
+            current = [clean]
+        else:
+            current.append(clean)
+            merge_count += 1
+
+    if current:
+        merged.append(" ".join(current))
+
+    new_body_section = "\n\n".join(merged) + ("\n" if merged else "")
+    log.record(
+        "unfragment_works_cited",
+        merge_count,
+        f"merged {merge_count} continuation paragraph(s) into prior entries",
+    )
+    return head + "\n\n" + new_body_section + tail
+
+
 def conservative_list_normalization(text: str, log: CleanupLog) -> str:
     """No-op for now. The spec calls for conservative behavior; without a
     library of real-world inputs the safe default is to leave lists alone
@@ -379,6 +504,7 @@ DEFAULT_PASSES: List[Pass] = [
     strip_orphan_page_numbers,
     normalize_dashes,
     normalize_smart_quotes,
+    unfragment_works_cited,
 ]
 
 
