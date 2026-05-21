@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Lint | {{ article['title'] }}{% endblock %}
+{% block head %}
+<style>
+  .lint-summary { display: flex; gap: var(--space-3); margin-bottom: var(--space-5); }
+  .lint-summary .chip {
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-pill);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+  .chip.fail { background: var(--status-error-bg); color: var(--status-error-fg); }
+  .chip.warn { background: var(--status-warn-bg);  color: var(--status-warn-fg); }
+  .chip.pass { background: var(--status-good-bg);  color: var(--status-good-fg); }
+
+  .lint-result {
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-sm);
+    padding: var(--space-4) var(--space-5);
+    margin-bottom: var(--space-3);
+    background: var(--paper);
+  }
+  .lint-result.level-fail { border-left: 3px solid var(--status-error-fg); }
+  .lint-result.level-warn { border-left: 3px solid var(--status-warn-fg); }
+  .lint-result.level-pass { border-left: 3px solid var(--status-good-fg); opacity: 0.85; }
+  .lint-result .heading {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+  .lint-result .name {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--muted);
+    letter-spacing: var(--tracking-wide);
+    text-transform: uppercase;
+  }
+  .lint-result .summary {
+    font-size: var(--text-base);
+    color: var(--ink);
+  }
+  .lint-result ul {
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-5);
+    color: var(--muted);
+    font-size: var(--text-sm);
+  }
+  .lint-result ul li { margin: 0.2em 0; }
+</style>
+{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Lint: {{ article['title'] }}</h1>
+  <p class="dim">
+    <code>{{ article['journal_slug'] }}/{{ article['slug'] }}</code>
+    &middot; <a href="{{ url_for('article_home', article_id=article['id']) }}">Back to article</a>
+    &middot; <a href="{{ url_for('article_metadata', article_id=article['id']) }}">Edit metadata</a>
+  </p>
+
+  <div class="lint-summary">
+    <span class="chip fail">{{ counts['fail'] }} fail</span>
+    <span class="chip warn">{{ counts['warn'] }} warn</span>
+    <span class="chip pass">{{ counts['pass'] }} pass</span>
+  </div>
+
+  {% for r in results %}
+  <div class="lint-result level-{{ r.level }}">
+    <div class="heading">
+      <span class="chip {{ r.level }}" style="padding: 0.1rem 0.5rem; font-size: 0.7rem;">{{ r.level }}</span>
+      <span class="name">{{ r.name }}</span>
+    </div>
+    <div class="summary">{{ r.summary }}</div>
+    {% if r.details %}
+    <ul>
+      {% for d in r.details %}
+      <li>{{ d | safe }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}

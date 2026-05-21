@@ -367,6 +367,23 @@ class RenderResult:
     html_path: Optional[Path]
     pdf_path: Optional[Path]
     errors: list
+    epub_path: Optional[Path] = None
+
+
+def _citation_args(article_path: Path, journal_slug: str) -> list[str]:
+    """Return the Pandoc CLI args for citation processing if a
+    references.bib is present in the article directory. The journal's
+    CSL stylesheet (e.g., mla.csl) supplies the formatting; default
+    fallback is built-in `chicago-author-date`."""
+    bib = article_path / "references.bib"
+    if not bib.exists():
+        return []
+    args = ["--citeproc", f"--bibliography={bib}"]
+    tpl = template_dir(journal_slug)
+    csl_candidates = list(tpl.glob("*.csl"))
+    if csl_candidates:
+        args.append(f"--csl={csl_candidates[0]}")
+    return args
 
 
 def render_html(article_path: Path, journal_slug: str) -> Path:
@@ -385,6 +402,7 @@ def render_html(article_path: Path, journal_slug: str) -> Path:
     ]
     if lua_filter.exists():
         extra.append(f"--lua-filter={lua_filter}")
+    extra.extend(_citation_args(article_path, journal_slug))
 
     if css.exists():
         shutil.copy2(css, article_path / css.name)
@@ -416,6 +434,7 @@ def render_pdf(article_path: Path, journal_slug: str) -> Path:
     extra = [f"--template={typ_template}"]
     if lua_filter.exists():
         extra.append(f"--lua-filter={lua_filter}")
+    extra.extend(_citation_args(article_path, journal_slug))
     pypandoc.convert_file(
         str(md),
         to="typst",
@@ -429,28 +448,77 @@ def render_pdf(article_path: Path, journal_slug: str) -> Path:
     return out
 
 
-def render_all(article_path: Path, journal_slug: str) -> RenderResult:
+def render_epub(article_path: Path, journal_slug: str) -> Path:
+    """Render an EPUB3 via Pandoc from the cleaned Markdown.
+
+    Pandoc handles EPUB structure (OPF manifest, NCX/nav, content
+    docs) natively. We pass the journal's CSS as the epub stylesheet
+    so the e-reader rendering broadly resembles the HTML galley.
+    """
+    md = article_path / "article.md"
+    out = article_path / "article.epub"
+    tpl = template_dir(journal_slug)
+    css = tpl / "article.css"
+
+    extra = [
+        "--standalone",
+        "--from", "markdown+yaml_metadata_block",
+        "--to", "epub3",
+    ]
+    if css.exists():
+        extra.extend(["--css", str(css)])
+    extra.extend(_citation_args(article_path, journal_slug))
+
+    pypandoc.convert_file(
+        str(md),
+        to="epub3",
+        format="markdown+yaml_metadata_block",
+        outputfile=str(out),
+        extra_args=extra,
+    )
+    return out
+
+
+def render_all(article_path: Path, journal_slug: str, formats: Optional[set] = None) -> RenderResult:
+    """Render the configured output formats. By default: HTML and PDF.
+
+    Pass `formats={"html", "pdf", "epub"}` to also render EPUB. The
+    `formats` knob is conservative so existing callers (issue assembly,
+    metadata-save auto-render) keep their behavior; downloads page can
+    request additional formats explicitly.
+    """
+    if formats is None:
+        formats = {"html", "pdf"}
+
     errors = []
-    html_path = pdf_path = None
-    try:
-        html_path = render_html(article_path, journal_slug)
-    except Exception as exc:
-        errors.append(f"HTML: {type(exc).__name__}: {exc}")
-    try:
-        pdf_path = render_pdf(article_path, journal_slug)
-    except Exception as exc:
-        errors.append(f"PDF: {type(exc).__name__}: {exc}")
+    html_path = pdf_path = epub_path = None
+    if "html" in formats:
+        try:
+            html_path = render_html(article_path, journal_slug)
+        except Exception as exc:
+            errors.append(f"HTML: {type(exc).__name__}: {exc}")
+    if "pdf" in formats:
+        try:
+            pdf_path = render_pdf(article_path, journal_slug)
+        except Exception as exc:
+            errors.append(f"PDF: {type(exc).__name__}: {exc}")
+    if "epub" in formats:
+        try:
+            epub_path = render_epub(article_path, journal_slug)
+        except Exception as exc:
+            errors.append(f"EPUB: {type(exc).__name__}: {exc}")
 
     body = json.dumps(
         {
             "html": str(html_path) if html_path else None,
             "pdf": str(pdf_path) if pdf_path else None,
+            "epub": str(epub_path) if epub_path else None,
             "errors": errors,
         },
         indent=2,
     )
     _append_log(article_path, "Stage 4: render", body)
-    return RenderResult(html_path=html_path, pdf_path=pdf_path, errors=errors)
+    return RenderResult(html_path=html_path, pdf_path=pdf_path, errors=errors, epub_path=epub_path)
 
 
 # ---------- DB integration ----------

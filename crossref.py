@@ -132,6 +132,106 @@ def _add_head(root: etree._Element, journal: dict):
     )
 
 
+def _read_bibtex(bib_path: Path) -> list[dict]:
+    """Parse a BibTeX file into a list of entries (dicts). Returns []
+    if the file is missing or invalid."""
+    if not bib_path.exists():
+        return []
+    try:
+        import bibtexparser
+        with bib_path.open(encoding="utf-8") as f:
+            db = bibtexparser.load(f)
+        return db.entries or []
+    except Exception:
+        return []
+
+
+def _bib_first_author(entry: dict) -> tuple[str, str]:
+    """Return (given, family) of the first author for CrossRef contributor."""
+    raw = entry.get("author", "")
+    if not raw:
+        return ("", "")
+    first = re.split(r"\s+and\s+", raw, maxsplit=1)[0].strip()
+    if "," in first:
+        family, _, given = first.partition(",")
+        return (given.strip(), family.strip())
+    parts = first.split()
+    if len(parts) == 1:
+        return ("", parts[0])
+    return (" ".join(parts[:-1]), parts[-1])
+
+
+def _clean_bibtex_braces(s: str) -> str:
+    """Strip BibTeX brace-protection from a string value."""
+    if not s:
+        return s
+    return s.replace("{", "").replace("}", "").strip()
+
+
+def _populate_structured_citation(cit_el: etree._Element, entry: dict):
+    """Emit a structured CrossRef citation from a BibTeX entry.
+
+    Maps common BibTeX fields to CrossRef's `citation` child elements.
+    Unrecognized fields fall through to `unstructured_citation` so no
+    information is lost.
+    """
+    journal = _clean_bibtex_braces(entry.get("journal") or entry.get("journaltitle") or "")
+    year = (entry.get("year") or "").strip()
+    volume = (entry.get("volume") or "").strip()
+    issue = (entry.get("number") or entry.get("issue") or "").strip()
+    pages = (entry.get("pages") or "").strip()
+    title = _clean_bibtex_braces(entry.get("title") or "")
+    doi = (entry.get("doi") or "").strip()
+    isbn = (entry.get("isbn") or "").strip()
+    issn = (entry.get("issn") or "").strip()
+    publisher = _clean_bibtex_braces(entry.get("publisher") or "")
+    given, family = _bib_first_author(entry)
+    series_title = _clean_bibtex_braces(entry.get("booktitle") or "")
+
+    if journal:
+        etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}journal_title").text = journal
+    if family:
+        etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}author").text = family
+    if volume:
+        etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}volume").text = volume
+    if issue:
+        etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}issue").text = issue
+    if pages:
+        first_page = pages.split("-")[0].strip()
+        if first_page:
+            etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}first_page").text = first_page
+    if year:
+        etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}cYear").text = year
+    if title:
+        if journal:
+            etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}article_title").text = title
+        else:
+            etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}volume_title").text = title
+    if series_title and not journal:
+        etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}series_title").text = series_title
+    if publisher and not journal:
+        etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}publication_type").text = "book"
+    if doi:
+        etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}doi").text = doi
+    if isbn and not journal:
+        etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}isbn").text = isbn
+    if issn:
+        etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}issn").text = issn
+
+    if len(cit_el) == 0:
+        # No recognized BibTeX fields populated anything; fall back to
+        # a unstructured concatenation so the deposit still carries the
+        # raw info.
+        formatted = ", ".join(
+            v for v in (
+                family, given, year, title, journal, volume, pages, publisher,
+            ) if v
+        )
+        etree.SubElement(cit_el, f"{{{CROSSREF_NS}}}unstructured_citation").text = (
+            formatted or "(empty entry)"
+        )
+
+
 def crossref_readiness(journal: dict) -> tuple[bool, list[str]]:
     """Return (is_ready, list_of_missing_fields)."""
     missing = []
@@ -226,16 +326,28 @@ def _add_article(
     etree.SubElement(doi_data, f"{{{CROSSREF_NS}}}doi").text = doi
     etree.SubElement(doi_data, f"{{{CROSSREF_NS}}}resource").text = resource_url
 
-    citations = extract_works_cited(article_md)
-    if citations:
+    bib_entries = _read_bibtex(Path(article["project_path"]) / "references.bib")
+    if bib_entries:
         cite_list = etree.SubElement(ja, f"{{{CROSSREF_NS}}}citation_list")
-        for idx, raw in enumerate(citations, start=1):
+        for idx, entry in enumerate(bib_entries, start=1):
             cit = etree.SubElement(
                 cite_list,
                 f"{{{CROSSREF_NS}}}citation",
-                key=f"ref{idx}",
+                key=entry.get("ID") or f"ref{idx}",
             )
-            etree.SubElement(cit, f"{{{CROSSREF_NS}}}unstructured_citation").text = raw
+            _populate_structured_citation(cit, entry)
+    else:
+        # Fall back to unstructured citations parsed out of the Markdown.
+        citations = extract_works_cited(article_md)
+        if citations:
+            cite_list = etree.SubElement(ja, f"{{{CROSSREF_NS}}}citation_list")
+            for idx, raw in enumerate(citations, start=1):
+                cit = etree.SubElement(
+                    cite_list,
+                    f"{{{CROSSREF_NS}}}citation",
+                    key=f"ref{idx}",
+                )
+                etree.SubElement(cit, f"{{{CROSSREF_NS}}}unstructured_citation").text = raw
 
 
 # ---------- public API ----------

@@ -15,6 +15,8 @@ from werkzeug.utils import secure_filename
 import conversion
 import crossref
 import db
+import jats
+import lint
 from auth import User, login_manager
 from config import (
     ALLOWED_UPLOAD_EXTENSIONS, CONTENT_DIR, MAX_UPLOAD_BYTES, SECRET_KEY,
@@ -727,6 +729,34 @@ def register_routes(app: Flask):
             toc_sections=toc_sections,
         )
 
+    @app.route("/articles/<int:article_id>/edit/wysiwyg", methods=["GET", "POST"])
+    @login_required
+    def article_edit_wysiwyg(article_id):
+        article = db.query_one("SELECT * FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        apath = Path(article["project_path"])
+        md_path = apath / "article.md"
+
+        if request.method == "POST":
+            payload = request.get_json(silent=True) or {}
+            body_md = payload.get("body", "")
+            fm, _existing_body = conversion.read_article_metadata(apath)
+            if fm:
+                # Reuse the canonical writer so YAML round-trips correctly.
+                conversion.write_article_metadata(apath, fm, body_md)
+            else:
+                # No YAML; write body as-is.
+                conversion.save_markdown(apath, body_md, note="wysiwyg save")
+            db.execute(
+                "UPDATE articles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (article_id,),
+            )
+            return jsonify({"ok": True, "bytes": len(body_md)})
+
+        fm, body = conversion.read_article_metadata(apath)
+        return render_template("edit_wysiwyg.html", article=article, body=body, fm=fm)
+
     @app.route("/articles/<int:article_id>/edit", methods=["GET", "POST"])
     @login_required
     def article_edit(article_id):
@@ -777,6 +807,26 @@ def register_routes(app: Flask):
     def serve_pdf(article_id):
         return _serve_artifact(article_id, "article.pdf")
 
+    @app.route("/articles/<int:article_id>/epub")
+    @login_required
+    def serve_epub(article_id):
+        article = db.query_one(
+            "SELECT a.*, j.slug AS journal_slug FROM articles a "
+            "JOIN journals j ON a.journal_id = j.id WHERE a.id = ?",
+            (article_id,),
+        )
+        if not article:
+            abort(404)
+        apath = Path(article["project_path"])
+        target = apath / "article.epub"
+        if not target.exists():
+            try:
+                conversion.render_epub(apath, article["journal_slug"])
+            except Exception as exc:
+                flash(f"EPUB render failed: {exc}", "error")
+                return redirect(url_for("article_home", article_id=article_id))
+        return send_from_directory(apath, "article.epub", as_attachment=True)
+
     @app.route("/articles/<int:article_id>/assets/<path:filename>")
     @login_required
     def serve_asset(article_id, filename):
@@ -826,6 +876,25 @@ def register_routes(app: Flask):
             journals.append(j)
         return render_template("crossref.html", journals=journals)
 
+    @app.route("/articles/<int:article_id>/jats.xml")
+    @login_required
+    def article_jats_xml(article_id):
+        try:
+            xml = jats.build_article_jats(
+                article_id, base_url=request.host_url.rstrip("/")
+            )
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("article_home", article_id=article_id))
+        from flask import Response
+        article = db.query_one("SELECT slug FROM articles WHERE id = ?", (article_id,))
+        filename = f"{article['slug']}-jats.xml" if article else f"article-{article_id}-jats.xml"
+        return Response(
+            xml,
+            mimetype="application/xml",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     @app.route("/articles/<int:article_id>/crossref.xml")
     @login_required
     def article_crossref_xml(article_id):
@@ -865,6 +934,49 @@ def register_routes(app: Flask):
             xml,
             mimetype="application/xml",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.route("/articles/<int:article_id>/bibliography", methods=["POST"])
+    @login_required
+    def article_upload_bibliography(article_id):
+        article = db.query_one(
+            "SELECT * FROM articles WHERE id = ?", (article_id,),
+        )
+        if not article:
+            abort(404)
+        f = request.files.get("bibliography")
+        if not f or not f.filename:
+            flash("No file uploaded.", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+        if not f.filename.lower().endswith(".bib"):
+            flash("Bibliography must be a .bib file.", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+        target = Path(article["project_path"]) / "references.bib"
+        f.save(target)
+        flash(f"Bibliography saved ({target.stat().st_size:,} bytes). Re-render to use it.", "success")
+        return redirect(url_for("article_home", article_id=article_id))
+
+    @app.route("/articles/<int:article_id>/lint")
+    @login_required
+    def article_lint(article_id):
+        article = db.query_one(
+            "SELECT a.*, j.slug AS journal_slug, j.name AS journal_name "
+            "FROM articles a JOIN journals j ON a.journal_id = j.id WHERE a.id = ?",
+            (article_id,),
+        )
+        if not article:
+            abort(404)
+        results = lint.run(dict(article))
+        counts = {
+            "fail": sum(1 for r in results if r.level == "fail"),
+            "warn": sum(1 for r in results if r.level == "warn"),
+            "pass": sum(1 for r in results if r.level == "pass"),
+        }
+        return render_template(
+            "lint.html",
+            article=article,
+            results=results,
+            counts=counts,
         )
 
     @app.route("/healthz")

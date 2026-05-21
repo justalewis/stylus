@@ -9,5 +9,6 @@ requests>=2.32
 typst>=0.13
 pypdf>=4.0
 pypdfium2>=4.30
+bibtexparser>=1.4
 html5validator>=0.4
 werkzeug>=3.0

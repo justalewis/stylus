@@ -11,6 +11,7 @@ content/**/article-raw.md
 content/**/article.html
 content/**/article.pdf
 content/**/article.typ
+content/**/article.epub
 content/**/conversion.log
 content/**/.versions/
 content/**/source.docx

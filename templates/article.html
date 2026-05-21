@@ -9,13 +9,31 @@
   </p>
   <nav class="action-row">
     <a class="button" href="{{ url_for('article_metadata', article_id=article['id']) }}">Edit metadata</a>
+    <a class="button ghost" href="{{ url_for('article_edit_wysiwyg', article_id=article['id']) }}">Edit (WYSIWYG)</a>
     <a class="button ghost" href="{{ url_for('article_edit', article_id=article['id']) }}">Edit Markdown</a>
+    <a class="button ghost" href="{{ url_for('article_lint', article_id=article['id']) }}">Run lint</a>
     <button class="button" id="render-btn" data-href="{{ url_for('article_render', article_id=article['id']) }}">Render</button>
     {% if rendered_html %}<a class="button ghost" href="{{ url_for('serve_html', article_id=article['id']) }}" target="_blank">View HTML</a>{% endif %}
     {% if rendered_pdf %}<a class="button ghost" href="{{ url_for('serve_pdf', article_id=article['id']) }}" target="_blank">View PDF</a>{% endif %}
+    <a class="button ghost" href="{{ url_for('serve_epub', article_id=article['id']) }}">Download EPUB</a>
+    <a class="button ghost" href="{{ url_for('article_jats_xml', article_id=article['id']) }}">Download JATS XML</a>
     <a class="button ghost" href="{{ url_for('article_crossref_xml', article_id=article['id']) }}">Download CrossRef XML</a>
   </nav>
   <div id="render-status" class="dim"></div>
+
+  <details style="margin-top: 1rem;">
+    <summary style="cursor: pointer; color: var(--muted); font-size: var(--text-sm);">Bibliography (BibTeX)</summary>
+    <p class="dim" style="margin-top: 0.75rem;">
+      Drop a <code>references.bib</code> here to enable structured citations.
+      Pandoc + the journal's CSL (currently MLA 9) will render Works Cited
+      automatically; CrossRef XML will emit structured <code>&lt;citation&gt;</code>
+      elements instead of unstructured prose.
+    </p>
+    <form method="post" enctype="multipart/form-data" action="{{ url_for('article_upload_bibliography', article_id=article['id']) }}" class="stack" style="margin-top: 0.75rem;">
+      <input type="file" name="bibliography" accept=".bib" required />
+      <button type="submit" class="button ghost small">Upload references.bib</button>
+    </form>
+  </details>
 </section>
 
 <section class="card">
