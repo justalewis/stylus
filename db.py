@@ -129,6 +129,8 @@ def _apply_migrations():
             ("mission_statement_md", "TEXT"),
             ("financial_credit_md", "TEXT"),
             ("toc_sections_json", "TEXT"),
+            ("editorial_team_json", "TEXT"),
+            ("editorial_board_json", "TEXT"),
         ],
         "articles": [
             ("kind", "TEXT DEFAULT 'article'"),

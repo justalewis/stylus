@@ -10,6 +10,30 @@
   textarea { width: 100%; min-height: 6rem; padding: 0.5rem 0.65rem; font: inherit; border: 1px solid var(--rule); border-radius: 4px; background: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.95rem; }
   textarea.tall { min-height: 10rem; }
   .wordmark-preview { max-width: 12rem; max-height: 6rem; display: block; margin: 0.5rem 0; background: #fff; border: 1px solid var(--rule); padding: 0.5rem; }
+  .editor-row {
+    display: grid;
+    grid-template-columns: 1.4fr 1.6fr 2fr auto;
+    gap: 0.5rem; align-items: end;
+    margin-bottom: 0.4rem; padding: 0.4rem; border: 1px dashed var(--rule);
+    border-radius: 4px; background: #fffdf7;
+  }
+  .board-row {
+    display: grid;
+    grid-template-columns: 1.6fr 2.5fr auto;
+    gap: 0.5rem; align-items: end;
+    margin-bottom: 0.4rem; padding: 0.4rem; border: 1px dashed var(--rule);
+    border-radius: 4px; background: #fffdf7;
+  }
+  .row-actions { display: flex; gap: 0.25rem; align-items: end; }
+  .row-actions button {
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--rule); padding: 0.3rem 0.5rem;
+    font-size: 0.85rem; min-width: 1.8rem;
+  }
+  .row-actions button:hover { background: var(--accent-soft); color: var(--accent); }
+  .row-actions button:disabled { opacity: 0.35; cursor: not-allowed; }
+  .row-actions button.remove-btn { color: var(--warn); border-color: var(--warn); }
+  .row-actions button.remove-btn:hover { background: var(--warn); color: #fff; }
 </style>
 {% endblock %}
 {% block content %}
@@ -46,13 +70,46 @@
       <h2>Front matter content</h2>
       <p class="help-text">Markdown. These render into the issue's front matter pages in this order: editorial team, editorial board, financial credit, mission statement.</p>
     </div>
-    <label class="full">Editorial team (Markdown)
-      <textarea name="editorial_team_md" class="tall" placeholder="| Managing Editor | Senior Editor |&#10;|---|---|&#10;| **Brenda Glascott** | **Tara Lockhart** |&#10;| *Portland State University* | *San Francisco State University* |">{{ journal['editorial_team_md'] or '' }}</textarea>
-      <span class="help-text">Markdown tables are recommended for the 2-column layout. Use **bold** for role headers, *italic* for institutions.</span>
-    </label>
-    <label class="full">Editorial board (Markdown)
-      <textarea name="editorial_board_md" class="tall" placeholder="Patrick Berry &mdash; *Syracuse University*&#10;&#10;Santosh Khadka &mdash; *California State University, Northridge*">{{ journal['editorial_board_md'] or '' }}</textarea>
-    </label>
+    <div class="section-divider">
+      <h2>Editorial Team</h2>
+      <p class="help-text">One row per editor. Renders as a 2-column grid: bold role, regular name, italic institution stacked in each cell.</p>
+    </div>
+    <div id="team-list">
+      {% set team_data = (journal['editorial_team_json'] or '[]') | from_json %}
+      {% for ed in team_data %}
+      <div class="editor-row">
+        <label>Role <span style="color:#b54e2c">*</span><input type="text" name="team_role" value="{{ ed.role }}" required /></label>
+        <label>Name <span style="color:#b54e2c">*</span><input type="text" name="team_name" value="{{ ed.name }}" required /></label>
+        <label>Institution<input type="text" name="team_institution" value="{{ ed.institution }}" /></label>
+        <div class="row-actions">
+          <button type="button" class="up-btn" title="Move up">&uarr;</button>
+          <button type="button" class="down-btn" title="Move down">&darr;</button>
+          <button type="button" class="remove-btn" title="Remove">Remove</button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <button type="button" class="button ghost small" id="add-team-btn">+ Add editor</button>
+
+    <div class="section-divider">
+      <h2>Editorial Board</h2>
+      <p class="help-text">Name and institution per row. Renders as a 2-column grid: regular name, italic institution stacked.</p>
+    </div>
+    <div id="board-list">
+      {% set board_data = (journal['editorial_board_json'] or '[]') | from_json %}
+      {% for m in board_data %}
+      <div class="board-row">
+        <label>Name <span style="color:#b54e2c">*</span><input type="text" name="board_name" value="{{ m.name }}" required /></label>
+        <label>Institution<input type="text" name="board_institution" value="{{ m.institution }}" /></label>
+        <div class="row-actions">
+          <button type="button" class="up-btn" title="Move up">&uarr;</button>
+          <button type="button" class="down-btn" title="Move down">&darr;</button>
+          <button type="button" class="remove-btn" title="Remove">Remove</button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <button type="button" class="button ghost small" id="add-board-btn">+ Add board member</button>
     <label class="full">Financial credit (Markdown)
       <textarea name="financial_credit_md" placeholder="*LiCS* is published with financial and administrative support from Portland State University.&#10;&#10;Print Layout: Justin Lewis&#10;Web Design: Justin Lewis&#10;Website: www.licsjournal.com&#10;Email: licsjournal@gmail.com">{{ journal['financial_credit_md'] or '' }}</textarea>
     </label>
@@ -94,4 +151,67 @@
     </div>
   </form>
 </section>
+
+<template id="team-row-template">
+  <div class="editor-row">
+    <label>Role <span style="color:#b54e2c">*</span><input type="text" name="team_role" required /></label>
+    <label>Name <span style="color:#b54e2c">*</span><input type="text" name="team_name" required /></label>
+    <label>Institution<input type="text" name="team_institution" /></label>
+    <div class="row-actions">
+      <button type="button" class="up-btn" title="Move up">&uarr;</button>
+      <button type="button" class="down-btn" title="Move down">&darr;</button>
+      <button type="button" class="remove-btn" title="Remove">Remove</button>
+    </div>
+  </div>
+</template>
+
+<template id="board-row-template">
+  <div class="board-row">
+    <label>Name <span style="color:#b54e2c">*</span><input type="text" name="board_name" required /></label>
+    <label>Institution<input type="text" name="board_institution" /></label>
+    <div class="row-actions">
+      <button type="button" class="up-btn" title="Move up">&uarr;</button>
+      <button type="button" class="down-btn" title="Move down">&darr;</button>
+      <button type="button" class="remove-btn" title="Remove">Remove</button>
+    </div>
+  </div>
+</template>
+
+<script>
+  function bindRowList(listEl, rowSelector, templateId, addBtnId) {
+    function refreshArrows() {
+      const rows = listEl.querySelectorAll(rowSelector);
+      rows.forEach((row, i) => {
+        const up = row.querySelector('.up-btn');
+        const down = row.querySelector('.down-btn');
+        if (up)   up.disabled   = (i === 0);
+        if (down) down.disabled = (i === rows.length - 1);
+      });
+    }
+    listEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      const row = btn.closest(rowSelector);
+      if (!row) return;
+      if (btn.classList.contains('up-btn') && row.previousElementSibling) {
+        row.parentNode.insertBefore(row, row.previousElementSibling);
+      } else if (btn.classList.contains('down-btn') && row.nextElementSibling) {
+        row.parentNode.insertBefore(row.nextElementSibling, row);
+      } else if (btn.classList.contains('remove-btn')) {
+        row.remove();
+      } else {
+        return;
+      }
+      refreshArrows();
+    });
+    document.getElementById(addBtnId).addEventListener('click', () => {
+      const tpl = document.getElementById(templateId);
+      listEl.appendChild(tpl.content.cloneNode(true));
+      refreshArrows();
+    });
+    refreshArrows();
+  }
+  bindRowList(document.getElementById('team-list'),  '.editor-row', 'team-row-template',  'add-team-btn');
+  bindRowList(document.getElementById('board-list'), '.board-row',  'board-row-template', 'add-board-btn');
+</script>
 {% endblock %}

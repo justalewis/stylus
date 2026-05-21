@@ -103,6 +103,31 @@ def register_routes(app: Flask):
             sections_raw = request.form.get("toc_sections_json", "").strip()
             sections = [line.strip() for line in sections_raw.splitlines() if line.strip()]
             sections_json = json.dumps(sections) if sections else None
+
+            team_roles = request.form.getlist("team_role")
+            team_names = request.form.getlist("team_name")
+            team_institutions = request.form.getlist("team_institution")
+            team = []
+            for i, name in enumerate(team_names):
+                role = (team_roles[i] if i < len(team_roles) else "").strip()
+                nm = (name or "").strip()
+                if not nm:
+                    continue
+                inst = (team_institutions[i] if i < len(team_institutions) else "").strip()
+                team.append({"role": role, "name": nm, "institution": inst})
+            team_json = json.dumps(team) if team else None
+
+            board_names = request.form.getlist("board_name")
+            board_institutions = request.form.getlist("board_institution")
+            board = []
+            for i, name in enumerate(board_names):
+                nm = (name or "").strip()
+                if not nm:
+                    continue
+                inst = (board_institutions[i] if i < len(board_institutions) else "").strip()
+                board.append({"name": nm, "institution": inst})
+            board_json = json.dumps(board) if board else None
+
             fields = {
                 "short_name": request.form.get("short_name", "").strip() or None,
                 "header_label_template": request.form.get("header_label_template", "").strip() or None,
@@ -110,6 +135,8 @@ def register_routes(app: Flask):
                 "depositor_email": request.form.get("depositor_email", "").strip() or None,
                 "editorial_team_md": request.form.get("editorial_team_md", "").strip() or None,
                 "editorial_board_md": request.form.get("editorial_board_md", "").strip() or None,
+                "editorial_team_json": team_json,
+                "editorial_board_json": board_json,
                 "mission_statement_md": request.form.get("mission_statement_md", "").strip() or None,
                 "financial_credit_md": request.form.get("financial_credit_md", "").strip() or None,
                 "toc_sections_json": sections_json,

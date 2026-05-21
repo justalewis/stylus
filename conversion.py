@@ -678,8 +678,14 @@ def render_front_matter(issue: dict, journal: dict, articles: list, editor_intro
 
     wordmark_block = _typst_wordmark_block(journal.get("wordmark_image_path"), out_dir, short_name)
 
-    team_typst = _md_to_typst_fragment(journal.get("editorial_team_md"))
-    board_typst = _md_to_typst_fragment(journal.get("editorial_board_md"))
+    team_typst = (
+        _structured_team_typst(journal.get("editorial_team_json"))
+        or _md_to_typst_fragment(journal.get("editorial_team_md"))
+    )
+    board_typst = (
+        _structured_board_typst(journal.get("editorial_board_json"))
+        or _md_to_typst_fragment(journal.get("editorial_board_md"))
+    )
     credit_typst = _md_to_typst_fragment(journal.get("financial_credit_md"))
     mission_typst = _md_to_typst_fragment(journal.get("mission_statement_md"))
     intro_typst = _md_to_typst_fragment(_read_editor_intro_body(editor_intro))
@@ -806,6 +812,86 @@ def render_front_matter(issue: dict, journal: dict, articles: list, editor_intro
     out_path.write_text(typst_doc, encoding="utf-8")
     typst_lib.compile(str(out_path), output=str(out_pdf), root=str(CONTENT_DIR))
     return out_pdf
+
+
+def _structured_team_typst(team_json: Optional[str]) -> str:
+    """Render a structured editorial team list as a 2-column Typst grid:
+    bold role, regular name, italic institution stacked in each cell.
+    Returns "" if the JSON is empty or invalid."""
+    if not team_json:
+        return ""
+    try:
+        import json
+        team = json.loads(team_json) or []
+    except Exception:
+        return ""
+    if not team:
+        return ""
+
+    cells = []
+    for ed in team:
+        role = (ed.get("role") or "").strip()
+        name = (ed.get("name") or "").strip()
+        inst = (ed.get("institution") or "").strip()
+        cell = (
+            "block(width: 100%, inset: (top: 0.4em, bottom: 0.4em), [\n"
+            "  #set par(first-line-indent: 0pt, justify: false, leading: 0.55em)\n"
+            "  #set align(center)\n"
+            f"  #text(weight: \"bold\", {_typst_str(role)})\n"
+            "  #linebreak()\n"
+            f"  #text({_typst_str(name)})\n"
+            + (f"  #linebreak()\n  #text(style: \"italic\", {_typst_str(inst)})\n" if inst else "")
+            + "])"
+        )
+        cells.append(cell)
+
+    cells_typst = ",\n  ".join(cells)
+    return (
+        "#table(\n"
+        "  columns: (1fr, 1fr),\n"
+        "  stroke: 0.4pt + rgb(\"#b6a98c\"),\n"
+        "  inset: 0pt,\n"
+        f"  {cells_typst}\n"
+        ")\n"
+    )
+
+
+def _structured_board_typst(board_json: Optional[str]) -> str:
+    """Render a structured editorial board list as a 2-column Typst grid:
+    regular name, italic institution stacked in each cell."""
+    if not board_json:
+        return ""
+    try:
+        import json
+        board = json.loads(board_json) or []
+    except Exception:
+        return ""
+    if not board:
+        return ""
+
+    cells = []
+    for m in board:
+        name = (m.get("name") or "").strip()
+        inst = (m.get("institution") or "").strip()
+        cell = (
+            "block(width: 100%, inset: (top: 0.35em, bottom: 0.35em, left: 0.6em, right: 0.6em), [\n"
+            "  #set par(first-line-indent: 0pt, justify: false, leading: 0.55em)\n"
+            "  #set align(center)\n"
+            f"  #text({_typst_str(name)})\n"
+            + (f"  #linebreak()\n  #text(size: 9.5pt, style: \"italic\", fill: rgb(\"#4a4137\"), {_typst_str(inst)})\n" if inst else "")
+            + "])"
+        )
+        cells.append(cell)
+
+    cells_typst = ",\n  ".join(cells)
+    return (
+        "#table(\n"
+        "  columns: (1fr, 1fr),\n"
+        "  stroke: 0.4pt + rgb(\"#b6a98c\"),\n"
+        "  inset: 0pt,\n"
+        f"  {cells_typst}\n"
+        ")\n"
+    )
 
 
 def _authors_inline_with_affil(authors) -> str:
