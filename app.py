@@ -596,12 +596,17 @@ def register_routes(app: Flask):
         log_text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
         rendered_html = (Path(article["project_path"]) / "article.html").exists()
         rendered_pdf = (Path(article["project_path"]) / "article.pdf").exists()
+        override_css_path = Path(article["project_path"]) / "article-override.css"
+        has_override = override_css_path.exists()
+        override_size = override_css_path.stat().st_size if has_override else 0
         return render_template(
             "article.html",
             article=article,
             log_text=log_text,
             rendered_html=rendered_html,
             rendered_pdf=rendered_pdf,
+            has_override=has_override,
+            override_size=override_size,
         )
 
     @app.route("/articles/<int:article_id>/metadata", methods=["GET", "POST"])
@@ -843,6 +848,21 @@ def register_routes(app: Flask):
             abort(404)
         return send_from_directory(Path(article["project_path"]), filename)
 
+    # Inline CSS routes: Pandoc emits `<link href="article.css">` (a
+    # relative URL) in the rendered HTML. When the article is served at
+    # /articles/<id>/html via Flask, that relative URL resolves to
+    # /articles/<id>/article.css, so the file needs a matching route to
+    # actually load. Same for the per-article override.
+    @app.route("/articles/<int:article_id>/article.css")
+    @login_required
+    def serve_article_inline_css(article_id):
+        return _serve_artifact(article_id, "article.css")
+
+    @app.route("/articles/<int:article_id>/article-override.css")
+    @login_required
+    def serve_article_inline_override_css(article_id):
+        return _serve_artifact(article_id, "article-override.css")
+
     # ---------- CrossRef ----------
 
     @app.route("/crossref")
@@ -935,6 +955,45 @@ def register_routes(app: Flask):
             mimetype="application/xml",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+
+    @app.route("/articles/<int:article_id>/override-css", methods=["POST"])
+    @login_required
+    def article_upload_override_css(article_id):
+        article = db.query_one("SELECT * FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        f = request.files.get("override_css")
+        if not f or not f.filename:
+            flash("No file uploaded.", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+        if not f.filename.lower().endswith(".css"):
+            flash("Override stylesheet must be a .css file.", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+        target = Path(article["project_path"]) / "article-override.css"
+        f.save(target)
+        flash(
+            f"Per-article CSS saved ({target.stat().st_size:,} bytes). "
+            "Re-render to apply.",
+            "success",
+        )
+        return redirect(url_for("article_home", article_id=article_id))
+
+    @app.route("/articles/<int:article_id>/override-css", methods=["DELETE", "POST"], endpoint="article_remove_override_css")
+    @login_required
+    def article_remove_override_css(article_id):
+        # Accept POST with a hidden _method=DELETE for HTML forms.
+        if request.method == "POST" and request.form.get("_method") != "DELETE":
+            abort(405)
+        article = db.query_one("SELECT * FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        target = Path(article["project_path"]) / "article-override.css"
+        if target.exists():
+            target.unlink()
+            flash("Per-article CSS removed. Re-render to revert.", "success")
+        else:
+            flash("No per-article CSS to remove.", "info")
+        return redirect(url_for("article_home", article_id=article_id))
 
     @app.route("/articles/<int:article_id>/bibliography", methods=["POST"])
     @login_required

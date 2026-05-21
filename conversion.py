@@ -413,6 +413,13 @@ def render_html(article_path: Path, journal_slug: str) -> Path:
     if css.exists():
         shutil.copy2(css, article_path / css.name)
 
+    # Per-article CSS override: additive, loaded after the journal CSS
+    # so its rules cascade-override. Edit /articles/<id>/css or drop
+    # article-override.css directly into the article directory.
+    override_css = article_path / "article-override.css"
+    if override_css.exists():
+        extra.append("--css=article-override.css")
+
     pypandoc.convert_file(
         str(md),
         to="html5",
@@ -482,6 +489,10 @@ def render_epub(article_path: Path, journal_slug: str) -> Path:
         extra.extend(["--lua-filter", str(fig_filter)])
     if css.exists():
         extra.extend(["--css", str(css)])
+    # Per-article CSS override: additive after the journal CSS
+    override_css = article_path / "article-override.css"
+    if override_css.exists():
+        extra.extend(["--css", str(override_css)])
     extra.extend(_citation_args(article_path, journal_slug))
 
     pypandoc.convert_file(

@@ -34,6 +34,30 @@
       <button type="submit" class="button ghost small">Upload references.bib</button>
     </form>
   </details>
+
+  <details style="margin-top: 0.75rem;">
+    <summary style="cursor: pointer; color: var(--muted); font-size: var(--text-sm);">Per-article CSS override</summary>
+    <p class="dim" style="margin-top: 0.75rem;">
+      Upload a stylesheet that loads after the journal's <code>article.css</code> and
+      cascade-overrides any rules you specify. Affects the HTML galley and the EPUB;
+      the PDF (rendered via Typst) is unaffected. Useful for one-off typography
+      tweaks on a special-issue article without changing the journal template.
+    </p>
+    {% set override_exists = (article['project_path'] ~ '/article-override.css') is mapping %}
+    {% if has_override %}
+    <p class="dim" style="margin-top: 0.5rem;">
+      Current override is in place ({{ override_size }} bytes). Re-uploading replaces it.
+    </p>
+    <form method="post" action="{{ url_for('article_remove_override_css', article_id=article['id']) }}" style="display:inline; margin-top: 0.5rem;">
+      <input type="hidden" name="_method" value="DELETE" />
+      <button type="submit" class="button ghost small" onclick="return confirm('Remove the per-article CSS override?');">Remove override</button>
+    </form>
+    {% endif %}
+    <form method="post" enctype="multipart/form-data" action="{{ url_for('article_upload_override_css', article_id=article['id']) }}" class="stack" style="margin-top: 0.75rem;">
+      <input type="file" name="override_css" accept=".css" required />
+      <button type="submit" class="button ghost small">Upload article-override.css</button>
+    </form>
+  </details>
 </section>
 
 <section class="card">

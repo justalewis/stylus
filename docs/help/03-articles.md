@@ -52,6 +52,16 @@ Two editors, same backing file:
 
 Each save snapshots the previous `article.md` into `.versions/article-{timestamp}.md` (last 5 kept).
 
+## Per-article CSS override
+
+Need one article to look slightly different from the rest of the journal — a special-issue piece, a tribute, a layout experiment? Drop a per-article stylesheet via the **Per-article CSS override** dropdown on the article home page.
+
+The uploaded `article-override.css` loads *after* the journal's `article.css`, so it cascade-overrides rules you specify without forcing you to redefine the rest of the design. Example: change just the accent color and section-heading font for one article.
+
+Affects the HTML galley and the EPUB. **The tagged PDF is rendered via Typst and isn't affected** — for one-off PDF customization, edit the journal template's Typst directly or duplicate the journal as a sibling and customize the duplicate's template.
+
+Remove the override at any time via the **Remove override** button. The file lives at `article-override.css` in the article directory; deleting it manually has the same effect.
+
 ## Linting
 
 Click **Run lint** for a one-shot validation pass with 11 checks:
