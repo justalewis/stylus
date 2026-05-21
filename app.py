@@ -12,6 +12,7 @@ from flask import (
 from flask_login import current_user, login_required, login_user, logout_user
 from werkzeug.utils import secure_filename
 
+import citation_styles
 import conversion
 import crossref
 import db
@@ -130,6 +131,18 @@ def register_routes(app: Flask):
                 board.append({"name": nm, "institution": inst})
             board_json = json.dumps(board) if board else None
 
+            citation_style = request.form.get("citation_style", "").strip() or None
+            if citation_style and citation_style != "custom":
+                try:
+                    citation_styles.install_style(
+                        conversion.template_dir(slug), citation_style
+                    )
+                except FileNotFoundError as exc:
+                    flash(f"Could not install citation style: {exc}", "error")
+                    return redirect(request.url)
+            elif citation_style == "custom":
+                citation_style = None  # store NULL; user manages the .csl file directly
+
             fields = {
                 "short_name": request.form.get("short_name", "").strip() or None,
                 "header_label_template": request.form.get("header_label_template", "").strip() or None,
@@ -144,6 +157,7 @@ def register_routes(app: Flask):
                 "toc_sections_json": sections_json,
                 "crossref_prefix": request.form.get("crossref_prefix", "").strip() or None,
                 "crossref_member_id": request.form.get("crossref_member_id", "").strip() or None,
+                "citation_style": citation_style,
             }
             updates = ", ".join(f"{k} = ?" for k in fields)
             db.execute(
@@ -180,7 +194,12 @@ def register_routes(app: Flask):
                 wordmark_url = url_for(
                     "serve_journal_asset", slug=slug, filename=Path(j["wordmark_image_path"]).name
                 )
-        return render_template("journal_settings.html", journal=j, wordmark_url=wordmark_url)
+        return render_template(
+            "journal_settings.html",
+            journal=j,
+            wordmark_url=wordmark_url,
+            bundled_styles=citation_styles.BUNDLED_STYLES,
+        )
 
     @app.route("/journals/<slug>/assets/<path:filename>")
     @login_required

@@ -70,13 +70,26 @@ Notes:
 
 ## Citation style
 
-By default, LiCS uses **MLA 9** (the most current MLA Handbook style at time of writing). The CSL file is bundled at `content/journals/lics/template/mla.csl`.
+By default, LiCS uses **MLA 9** (the most current MLA Handbook style at time of writing). The CSL file lives in the journal's template directory.
 
-To use a different style:
+**To switch styles, the easy way:** go to **Journal Settings**, scroll to *Citation style*, pick from the dropdown:
 
-1. Download the appropriate CSL from <https://github.com/citation-style-language/styles>.
-2. Save it into the journal's template directory: `content/journals/<slug>/template/<name>.csl`.
-3. The renderer picks up the *first* `.csl` it finds. If you want to keep multiple CSL files around but use one, delete or rename the others.
+- MLA 9
+- APA 7
+- Chicago 17 (author-date)
+- Chicago 17 (notes-bibliography)
+- IEEE
+
+On save, the tool copies the selected CSL into the journal's template directory and removes any prior one. Re-render any open articles to apply the new style.
+
+**To use a style not in the bundled list:**
+
+1. Download the CSL from <https://github.com/citation-style-language/styles>.
+2. Drop it into `content/journals/<slug>/template/`.
+3. In Journal Settings, set the citation style to *Custom (managed by file in template/)*.
+4. The renderer picks up whatever `.csl` is in the template directory.
+
+The bundled set covers the most common cases in humanities and adjacent fields. To extend the bundled list, drop a new `.csl` into the repo's top-level `csl/` directory and add an entry to `BUNDLED_STYLES` in `citation_styles.py`.
 
 ## When to use which option
 

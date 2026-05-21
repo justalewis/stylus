@@ -118,6 +118,20 @@
     </label>
 
     <div class="section-divider">
+      <h2>Citation style</h2>
+      <p class="help-text">Determines how in-text citations and the Works Cited list are formatted when an article has a <code>references.bib</code>. Selecting a style here copies the corresponding CSL file into the journal template (replacing any prior one). To use a style not in this list, drop a <code>.csl</code> file directly into the journal's template directory and select <em>Custom</em>.</p>
+    </div>
+    <label>Style
+      <select name="citation_style">
+        {% set current_style = journal['citation_style'] or '' %}
+        {% for key, label in bundled_styles %}
+        <option value="{{ key }}" {% if current_style == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+        <option value="custom" {% if not current_style %}selected{% endif %}>Custom (managed by file in template/)</option>
+      </select>
+    </label>
+
+    <div class="section-divider">
       <h2>Table of contents</h2>
     </div>
     <label class="full">Section labels (one per line, in display order)

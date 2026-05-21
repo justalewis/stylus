@@ -131,6 +131,7 @@ def _apply_migrations():
             ("toc_sections_json", "TEXT"),
             ("editorial_team_json", "TEXT"),
             ("editorial_board_json", "TEXT"),
+            ("citation_style", "TEXT"),
         ],
         "articles": [
             ("kind", "TEXT DEFAULT 'article'"),
