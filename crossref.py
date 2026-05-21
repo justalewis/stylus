@@ -122,14 +122,23 @@ def _add_head(root: etree._Element, journal: dict):
     )
     depositor = etree.SubElement(head, f"{{{CROSSREF_NS}}}depositor")
     etree.SubElement(depositor, f"{{{CROSSREF_NS}}}depositor_name").text = (
-        journal.get("name", "publisher")
+        journal.get("depositor_name") or journal.get("name") or "publisher"
     )
     etree.SubElement(depositor, f"{{{CROSSREF_NS}}}email_address").text = (
-        "noreply@example.org"
+        journal.get("depositor_email") or "noreply@example.org"
     )
-    etree.SubElement(head, f"{{{CROSSREF_NS}}}registrant").text = journal.get(
-        "name", "publisher"
+    etree.SubElement(head, f"{{{CROSSREF_NS}}}registrant").text = (
+        journal.get("name", "publisher")
     )
+
+
+def crossref_readiness(journal: dict) -> tuple[bool, list[str]]:
+    """Return (is_ready, list_of_missing_fields)."""
+    missing = []
+    for f in ("crossref_prefix", "crossref_member_id", "depositor_name", "depositor_email"):
+        if not (journal.get(f) or "").strip():
+            missing.append(f)
+    return (not missing, missing)
 
 
 def _add_journal_metadata(journal_el: etree._Element, journal: dict):
@@ -247,12 +256,11 @@ def build_article_deposit_xml(article_id: int, base_url: str = "https://example.
 
     issue_row = db.query_one("SELECT * FROM issues WHERE id = ?", (art["issue_id"],))
     issue = dict(issue_row)
-    journal = {
-        "name": art["journal_name"], "issn": art["journal_issn"],
-        "crossref_prefix": art["crossref_prefix"],
-        "crossref_member_id": art["crossref_member_id"],
-        "config_json": art["config_json"],
-    }
+    journal_row = db.query_one(
+        "SELECT * FROM journals WHERE id = ?",
+        (art["journal_id"],),
+    )
+    journal = dict(journal_row) if journal_row else {}
 
     apath = Path(art["project_path"])
     fm, body = conversion.read_article_metadata(apath)
@@ -292,12 +300,11 @@ def build_issue_deposit_xml(issue_id: int, base_url: str = "https://example.org"
         raise ValueError("Issue has no articles to deposit")
     articles = [dict(r) for r in article_rows]
 
-    journal = {
-        "name": issue["journal_name"], "issn": issue["journal_issn"],
-        "crossref_prefix": issue["crossref_prefix"],
-        "crossref_member_id": issue["crossref_member_id"],
-        "config_json": issue["config_json"],
-    }
+    journal_row = db.query_one(
+        "SELECT * FROM journals WHERE id = ?",
+        (issue["journal_id"],),
+    )
+    journal = dict(journal_row) if journal_row else {}
 
     root = _root()
     _add_head(root, journal)

@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}CrossRef | LiCS Pipeline{% endblock %}
+{% block head %}
+<style>
+  .journal-block { border: 1px solid var(--rule); border-radius: 6px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; background: #fff; }
+  .journal-block h2 { margin: 0 0 0.5rem; }
+  .journal-block .meta { color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem; }
+  .config-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.4rem 1rem;
+    font-size: 0.95rem;
+    margin-bottom: 1rem;
+  }
+  .config-grid .label { color: var(--muted); }
+  .config-grid .value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .config-grid .value.missing { color: var(--warn); font-style: italic; font-family: var(--serif); }
+  .readiness {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.85rem;
+    border-radius: 12px;
+    margin-left: 0.5rem;
+  }
+  .readiness.ready { background: #d8edd8; color: #2c5e3a; }
+  .readiness.incomplete { background: #f5dfd6; color: var(--warn); }
+  .deposit-list { margin-top: 1rem; }
+  .deposit-list table th { white-space: nowrap; }
+  .deposit-list code { font-size: 0.85rem; }
+  .deposit-actions a, .deposit-actions span { margin-right: 0.6rem; font-size: 0.9rem; }
+  .deposit-actions .disabled { color: var(--muted); }
+  .sample-doi {
+    display: inline-block;
+    background: var(--accent-soft);
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85rem;
+  }
+</style>
+{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>CrossRef</h1>
+  <p class="dim">Deposit XML generation and per-journal config. Tool emits CrossRef 5.3.1 conformant XML for manual upload to <a href="https://doi.crossref.org" target="_blank">CrossRef admin</a>.</p>
+</section>
+
+{% for j in journals %}
+<section class="journal-block">
+  <h2>
+    {{ j['name'] }}
+    {% if j['_ready'] %}
+      <span class="readiness ready">ready</span>
+    {% else %}
+      <span class="readiness incomplete">incomplete</span>
+    {% endif %}
+  </h2>
+  <p class="meta">
+    <code>{{ j['slug'] }}</code>
+    &middot; <a href="{{ url_for('journal_settings', slug=j['slug']) }}">Edit settings</a>
+  </p>
+
+  <div class="config-grid">
+    <span class="label">DOI prefix</span>
+    <span class="value {% if not j['crossref_prefix'] %}missing{% endif %}">{{ j['crossref_prefix'] or 'not set' }}</span>
+    <span class="label">Member ID</span>
+    <span class="value {% if not j['crossref_member_id'] %}missing{% endif %}">{{ j['crossref_member_id'] or 'not set' }}</span>
+    <span class="label">Depositor name</span>
+    <span class="value {% if not j['depositor_name'] %}missing{% endif %}">{{ j['depositor_name'] or 'not set' }}</span>
+    <span class="label">Depositor email</span>
+    <span class="value {% if not j['depositor_email'] %}missing{% endif %}">{{ j['depositor_email'] or 'not set' }}</span>
+    <span class="label">Sample DOI</span>
+    <span><span class="sample-doi">{{ j['_sample_doi'] }}</span></span>
+  </div>
+
+  {% if not j['_ready'] %}
+  <p class="dim">Missing: {% for f in j['_missing'] %}<code>{{ f }}</code>{% if not loop.last %}, {% endif %}{% endfor %}. <a href="{{ url_for('journal_settings', slug=j['slug']) }}">Set these in Journal Settings</a> before depositing.</p>
+  {% endif %}
+
+  <div class="deposit-list">
+    <h3 style="margin: 1rem 0 0.5rem; font-size: 1rem;">Issues</h3>
+    {% if j['_issues'] %}
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Issue</th>
+          <th>Year</th>
+          <th>Articles</th>
+          <th>Status</th>
+          <th>Deposit</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for i in j['_issues'] %}
+        <tr>
+          <td><a href="{{ url_for('issue_home', issue_id=i['id']) }}"><strong>{{ i['volume'] }}.{{ i['issue_number'] }}</strong></a></td>
+          <td>{{ i['year'] }}</td>
+          <td class="dim">{{ i['article_count'] }}</td>
+          <td><span class="badge status-{{ i['status'] }}">{{ i['status'] }}</span></td>
+          <td class="deposit-actions">
+            {% if i['article_count'] %}
+              <a href="{{ url_for('issue_crossref_xml', issue_id=i['id']) }}">Download issue XML</a>
+            {% else %}
+              <span class="disabled">No articles</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="dim">No issues created yet.</p>
+    {% endif %}
+  </div>
+</section>
+{% endfor %}
+
+<section class="card">
+  <h2>How to deposit</h2>
+  <ol style="line-height: 1.7;">
+    <li>Make sure each journal has its DOI prefix, member ID, and depositor identity set. CrossRef will reject deposits with placeholder emails.</li>
+    <li>For each issue you want to register: assemble the issue (so each article has <code>start_page</code>/<code>end_page</code>), then download the issue XML from this page.</li>
+    <li>Upload the XML at <a href="https://doi.crossref.org" target="_blank">doi.crossref.org</a> using your CrossRef admin account. DOIs are minted when CrossRef accepts the deposit.</li>
+    <li>Per-article XML is also available from each article's page if you need to deposit articles individually.</li>
+  </ol>
+</section>
+{% endblock %}

@@ -768,6 +768,37 @@ def register_routes(app: Flask):
 
     # ---------- CrossRef ----------
 
+    @app.route("/crossref")
+    @login_required
+    def crossref_home():
+        journal_rows = db.query_all("SELECT * FROM journals ORDER BY name")
+        journals = []
+        for jr in journal_rows:
+            j = dict(jr)
+            ready, missing = crossref.crossref_readiness(j)
+            # Sample DOI preview
+            try:
+                sample_doi = crossref.assign_doi(
+                    j,
+                    {"volume": 13, "issue_number": 1, "year": 2026},
+                    {"slug": "example-2026"},
+                    position=1,
+                )
+            except Exception:
+                sample_doi = "(unable to compute)"
+            j["_ready"] = ready
+            j["_missing"] = missing
+            j["_sample_doi"] = sample_doi
+            j["_issues"] = db.query_all(
+                "SELECT i.*, "
+                "  (SELECT COUNT(*) FROM articles a WHERE a.issue_id = i.id AND COALESCE(a.kind,'article') != 'editorial') AS article_count "
+                "FROM issues i WHERE i.journal_id = ? "
+                "ORDER BY i.year DESC, i.volume DESC, i.issue_number DESC",
+                (j["id"],),
+            )
+            journals.append(j)
+        return render_template("crossref.html", journals=journals)
+
     @app.route("/articles/<int:article_id>/crossref.xml")
     @login_required
     def article_crossref_xml(article_id):
