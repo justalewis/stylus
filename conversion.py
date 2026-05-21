@@ -496,27 +496,33 @@ def assemble_issue(issue_id: int) -> AssemblyResult:
     import json
     from pypdf import PdfWriter, PdfReader
 
-    issue = db.query_one(
+    issue_row = db.query_one(
         "SELECT i.*, j.slug AS journal_slug, j.name AS journal_name, j.issn AS journal_issn "
         "FROM issues i JOIN journals j ON i.journal_id = j.id WHERE i.id = ?",
         (issue_id,),
     )
-    if not issue:
+    if not issue_row:
         raise ValueError(f"Issue {issue_id} not found")
+    issue = dict(issue_row)
 
-    articles = db.query_all(
+    journal_row = db.query_one("SELECT * FROM journals WHERE id = ?", (issue["journal_id"],))
+    journal = dict(journal_row) if journal_row else {}
+
+    article_rows = db.query_all(
         "SELECT * FROM articles WHERE issue_id = ? "
         "ORDER BY COALESCE(order_in_issue, 999999), updated_at",
         (issue_id,),
     )
-    if not articles:
+    if not article_rows:
         raise ValueError("Issue has no articles to assemble")
+    articles_all = [dict(r) for r in article_rows]
+    articles = [a for a in articles_all if (a.get("kind") or "article") != "editorial"]
+    editor_intro = next((a for a in articles_all if (a.get("kind") or "article") == "editorial"), None)
 
     errors: list = []
     article_pages: list = []
     cumulative = 0
     article_pdf_paths: list = []
-    toc_entries: list = []
 
     for art in articles:
         apath = Path(art["project_path"])
@@ -542,24 +548,35 @@ def assemble_issue(issue_id: int) -> AssemblyResult:
 
         article_pages.append((art["id"], start_page, end_page))
         article_pdf_paths.append(pdf_path)
-        toc_entries.append({
-            "title": fm.get("title", art["title"]),
-            "authors": _authors_inline(fm.get("author", [])),
-            "start_page": start_page,
-            "end_page": end_page,
-        })
         cumulative = end_page
+
+    # Refresh article rows so start_page is included for the ToC.
+    refreshed_rows = db.query_all(
+        "SELECT * FROM articles WHERE issue_id = ? "
+        "ORDER BY COALESCE(order_in_issue, 999999), updated_at",
+        (issue_id,),
+    )
+    refreshed = [dict(r) for r in refreshed_rows]
+    articles_for_toc = [a for a in refreshed if (a.get("kind") or "article") != "editorial"]
+
+    toc_entries = [{
+        "title": a["title"],
+        "authors": "",  # filled in by front-matter renderer from each article's YAML
+        "start_page": a.get("start_page"),
+        "end_page": a.get("end_page"),
+        "section": a.get("section") or "ARTICLES",
+    } for a in articles_for_toc]
 
     issue_dir_path = issue_dir(issue["journal_slug"], issue_slug_for(issue["volume"], issue["issue_number"], issue["year"]))
     (issue_dir_path / "issue-toc.json").write_text(
         json.dumps(toc_entries, indent=2), encoding="utf-8"
     )
 
-    cover_pdf = _render_issue_cover(issue, toc_entries, issue_dir_path)
+    front_pdf = render_front_matter(issue, journal, articles_for_toc, editor_intro, issue_dir_path)
 
     issue_pdf = issue_dir_path / "issue.pdf"
     writer = PdfWriter()
-    for pdf_path in [cover_pdf] + article_pdf_paths:
+    for pdf_path in [front_pdf] + article_pdf_paths:
         reader = PdfReader(str(pdf_path))
         for page in reader.pages:
             writer.add_page(page)
@@ -587,6 +604,225 @@ def _authors_inline(authors) -> str:
     if len(names) <= 2:
         return ", ".join(names)
     return ", ".join(names[:-1]) + ", and " + names[-1]
+
+
+def _md_to_typst_fragment(md_text: Optional[str]) -> str:
+    """Convert a Markdown string to a Typst content fragment via Pandoc.
+    Returns an empty string if the input is empty."""
+    if not md_text or not md_text.strip():
+        return ""
+    return pypandoc.convert_text(
+        md_text, to="typst", format="markdown",
+        extra_args=["--wrap=preserve"],
+    )
+
+
+def _read_editor_intro_body(article: Optional[dict]) -> str:
+    """Pull the body markdown from an editor's-intro article, stripping
+    YAML front matter."""
+    if not article:
+        return ""
+    md_path = Path(article["project_path"]) / "article.md"
+    if not md_path.exists():
+        return ""
+    text = md_path.read_text(encoding="utf-8")
+    if text.startswith("---"):
+        end = text.find("\n---", 4)
+        if end != -1:
+            return text[end + len("\n---"):].lstrip()
+    return text
+
+
+def _toc_section_order(journal: dict) -> list[str]:
+    """Return the journal's configured ToC section labels in order, or
+    a sensible default."""
+    raw = journal.get("toc_sections_json")
+    if raw:
+        try:
+            import json
+            sections = json.loads(raw)
+            if isinstance(sections, list) and sections:
+                return [str(s) for s in sections]
+        except Exception:
+            pass
+    return ["ARTICLES"]
+
+
+def render_front_matter(issue: dict, journal: dict, articles: list, editor_intro: Optional[dict], out_dir: Path) -> Path:
+    """Render the issue's full front matter (cover, editorial team,
+    board + credits, mission statement, editor's introduction, ToC) as
+    a single roman-paginated PDF.
+
+    Articles with kind=editorial are excluded from the ToC. The editor's
+    intro itself comes in via the `editor_intro` argument (the article
+    record). Returns the path to front_matter.pdf.
+    """
+    import typst as typst_lib
+
+    vol = issue["volume"]
+    num = issue["issue_number"]
+    year = issue["year"]
+    season = issue.get("header_season") or ""
+    title = issue.get("title") or ""
+    journal_name = journal.get("name") or issue.get("journal_name") or ""
+    short_name = journal.get("short_name") or _short_journal_name(journal_name)
+    issn = issue.get("journal_issn") or journal.get("issn") or ""
+
+    header_template = journal.get("header_label_template") or "*{short_name}* {volume}.{issue} / {season}"
+    header_label = header_template.format(
+        short_name=short_name, name=journal_name,
+        volume=vol, issue=num, year=year, season=season,
+    ).strip()
+    if header_label.endswith("/"):
+        header_label = header_label[:-1].strip()
+
+    wordmark_block = _typst_wordmark_block(journal.get("wordmark_image_path"), out_dir, short_name)
+
+    team_typst = _md_to_typst_fragment(journal.get("editorial_team_md"))
+    board_typst = _md_to_typst_fragment(journal.get("editorial_board_md"))
+    credit_typst = _md_to_typst_fragment(journal.get("financial_credit_md"))
+    mission_typst = _md_to_typst_fragment(journal.get("mission_statement_md"))
+    intro_typst = _md_to_typst_fragment(_read_editor_intro_body(editor_intro))
+
+    # Build ToC entries grouped by section, in journal-configured order
+    section_order = _toc_section_order(journal)
+    toc_by_section: dict[str, list] = {label: [] for label in section_order}
+    for art in articles:
+        if (art.get("kind") or "article") == "editorial":
+            continue
+        section = (art.get("section") or section_order[0]).strip()
+        toc_by_section.setdefault(section, []).append(art)
+
+    # Compose ToC Typst
+    toc_blocks = []
+    for label in list(toc_by_section.keys()):
+        entries = toc_by_section.get(label) or []
+        if not entries:
+            continue
+        toc_blocks.append(
+            f'#v(0.5em)\n'
+            f'#grid(columns: (1fr, auto), gutter: 0.5em,\n'
+            f'  text(size: 11pt, tracking: 0.05em, {_typst_str(label.upper())}),\n'
+            f'  line(length: 100%, stroke: 0.5pt + rgb("#1a1612")),\n'
+            f')\n'
+            f'#v(0.5em)\n'
+        )
+        for art in entries:
+            md_path = Path(art["project_path"]) / "article.md"
+            fm = {}
+            try:
+                if md_path.exists():
+                    fm, _ = read_article_metadata(Path(art["project_path"]))
+            except Exception:
+                fm = {}
+            title_text = fm.get("title") or art["title"]
+            authors_text = _authors_inline_with_affil(fm.get("author") or [])
+            start = art.get("start_page") or "?"
+            toc_blocks.append(
+                f'#grid(columns: (3em, 1fr), gutter: 0.4em,\n'
+                f'  align(left, text(size: 10pt, {_typst_str(str(start))})),\n'
+                f'  block(width: 100%, [\n'
+                f'    #text(size: 10pt, {_typst_str(title_text)})\n'
+                f'    {("#linebreak()" + chr(10) + "    #text(size: 10pt, style: " + chr(34) + "italic" + chr(34) + ", " + _typst_str(authors_text) + ")") if authors_text else ""}\n'
+                f'  ]),\n'
+                f')\n'
+                f'#v(0.6em)\n'
+            )
+    toc_typst = "".join(toc_blocks)
+
+    intro_heading = f"EDITORS' INTRODUCTION TO ISSUE {vol}.{num}"
+
+    typst_doc = f"""
+#let ink = rgb("#1a1612")
+#let ink-soft = rgb("#4a4137")
+#let rule-color = rgb("#b6a98c")
+#let header-label = [{_typst_inline_md(header_label)}]
+
+#set page(
+  paper: "us-letter",
+  width: 6in,
+  height: 9in,
+  margin: (top: 0.85in, bottom: 0.95in, left: 0.75in, right: 0.75in),
+  numbering: "I",
+  number-align: right,
+  header: context {{
+    let p = counter(page).at(here()).first()
+    if p == 1 {{ return [] }}
+    align(center, text(size: 9pt, fill: ink, style: "italic", header-label))
+  }},
+)
+
+#set text(font: ("EB Garamond", "Garamond", "Georgia"), size: 11pt, fill: ink, hyphenate: false)
+#set par(justify: true, leading: 0.65em, first-line-indent: 0pt)
+
+// Tables: thin rules, generous padding, EB Garamond throughout
+#show table.cell: set text(size: 10.5pt)
+#set table(stroke: 0.5pt + rule-color, inset: 8pt)
+
+// ============ PAGE I: COVER ============
+
+#align(center, text(size: 9pt, style: "italic", fill: ink-soft, header-label))
+{wordmark_block}
+
+#v(1fr)
+
+#align(right, block(width: auto, {{
+  set par(first-line-indent: 0pt)
+  text(size: 22pt, weight: 600, "{year}")
+  linebreak()
+  text(size: 14pt, "Volume {vol}, Number {num}")
+  {f'linebreak(); v(0.4em); text(size: 11pt, style: "italic", fill: ink-soft, {_typst_str(title)})' if title else ''}
+}}))
+
+#v(0.4in)
+
+// ============ PAGE II: EDITORIAL TEAM ============
+{("#pagebreak()" + chr(10) + chr(10) + "#v(0.5in)" + chr(10) + "#align(center, text(size: 14pt, tracking: 0.18em, " + _typst_str(journal_name.upper()) + "))" + chr(10) + "#v(1em)" + chr(10) + chr(10) + team_typst) if team_typst else ""}
+
+// ============ PAGE III: EDITORIAL BOARD ============
+{("#pagebreak()" + chr(10) + chr(10) + "#v(0.4in)" + chr(10) + "#align(center, text(size: 14pt, tracking: 0.18em, " + chr(34) + "EDITORIAL BOARD" + chr(34) + "))" + chr(10) + "#v(1em)" + chr(10) + chr(10) + board_typst) if board_typst else ""}
+
+{("#v(1.5em)" + chr(10) + "#align(center, block(width: 70%, [" + chr(10) + "  #set par(first-line-indent: 0pt, justify: false, leading: 0.6em)" + chr(10) + "  #set text(size: 10pt, style: " + chr(34) + "italic" + chr(34) + ", fill: ink-soft)" + chr(10) + "  " + credit_typst + chr(10) + "]))") if credit_typst else ""}
+
+// ============ MISSION STATEMENT ============
+{("#pagebreak()" + chr(10) + chr(10) + "#v(0.4in)" + chr(10) + "#align(center, text(size: 14pt, tracking: 0.18em, [#text(style: " + chr(34) + "italic" + chr(34) + ", " + chr(34) + short_name + chr(34) + ") MISSION STATEMENT]))" + chr(10) + "#v(1em)" + chr(10) + chr(10) + "#set par(first-line-indent: 1.4em, justify: true)" + chr(10) + mission_typst) if mission_typst else ""}
+
+// ============ EDITORS' INTRODUCTION ============
+{("#pagebreak()" + chr(10) + chr(10) + "#v(0.4in)" + chr(10) + "#align(center, text(size: 14pt, tracking: 0.18em, " + _typst_str(intro_heading) + "))" + chr(10) + "#v(1em)" + chr(10) + chr(10) + "#set par(first-line-indent: 1.4em, justify: true)" + chr(10) + intro_typst) if intro_typst else ""}
+
+// ============ TABLE OF CONTENTS ============
+#pagebreak()
+
+#v(0.4in)
+#align(center, text(size: 14pt, tracking: 0.18em, "CONTENTS"))
+#v(1.5em)
+
+#set par(first-line-indent: 0pt, justify: false)
+{toc_typst}
+"""
+
+    out_path = out_dir / "_front_matter.typ"
+    out_pdf = out_dir / "_front_matter.pdf"
+    out_path.write_text(typst_doc, encoding="utf-8")
+    typst_lib.compile(str(out_path), output=str(out_pdf), root=str(CONTENT_DIR))
+    return out_pdf
+
+
+def _authors_inline_with_affil(authors) -> str:
+    if not authors:
+        return ""
+    parts = []
+    for a in authors:
+        if isinstance(a, dict):
+            name = a.get("name", "")
+            aff = a.get("affiliation", "")
+            if aff:
+                parts.append(f"{name} — {aff}")
+            else:
+                parts.append(name)
+        else:
+            parts.append(str(a))
+    return "; ".join(p for p in parts if p)
 
 
 def _render_issue_cover(issue, toc_entries: list, out_dir: Path) -> Path:
@@ -748,20 +984,19 @@ def _typst_inline_md(s: str) -> str:
 def _typst_wordmark_block(rel_path: Optional[str], out_dir: Path, fallback: str) -> str:
     """Emit Typst code that renders the journal wordmark, either as an
     image (if the file exists) or as a large text fallback. The path is
-    rewritten to be relative to the cover .typ file's location."""
+    resolved via Typst's --root setting, so wordmark image paths are
+    emitted as absolute-from-root references ("/journals/.../...")."""
     if rel_path:
         candidate = (CONTENT_DIR / rel_path).resolve()
         if candidate.exists():
-            # With root=CONTENT_DIR, Typst resolves leading-slash paths
-            # against the root, so use "/journals/.../wordmark.png".
             typst_path = "/" + rel_path.lstrip("/").replace("\\", "/")
             return (
-                f'#v(0.7in)\n'
+                f'\n#v(0.7in)\n'
                 f'#align(center, block(width: 100%, '
-                f'image({_typst_str(typst_path)}, width: 75%, fit: "contain")))'
+                f'image({_typst_str(typst_path)}, width: 75%, fit: "contain")))\n'
             )
     return (
-        f'#align(center, block(inset: (top: 1.5in), '
-        f'text(size: 96pt, weight: 700, font: ("Helvetica Neue", "Helvetica", "Arial"), {_typst_str(fallback)})))\n'
-        f'#align(center, text(size: 18pt, font: ("Helvetica Neue", "Helvetica", "Arial"), {_typst_str("Literacy in Composition Studies" if fallback == "LiCS" else "")}))'
+        f'\n#v(1.5in)\n'
+        f'#align(center, text(size: 96pt, weight: 700, font: ("Helvetica Neue", "Helvetica", "Arial"), {_typst_str(fallback)}))\n'
+        f'#align(center, text(size: 18pt, font: ("Helvetica Neue", "Helvetica", "Arial"), {_typst_str("Literacy in Composition Studies" if fallback == "LiCS" else "")}))\n'
     )

@@ -13,6 +13,9 @@
     <form method="post" action="{{ url_for('issue_assemble', issue_id=issue['id']) }}" style="display:inline" onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Assembling...';">
       <button type="submit" class="button" {% if not articles %}disabled title="Add at least one article first"{% endif %}>Assemble issue</button>
     </form>
+    <form method="post" action="{{ url_for('issue_create_editor_intro', issue_id=issue['id']) }}" style="display:inline">
+      <button type="submit" class="button ghost">{% if articles|selectattr('kind', 'equalto', 'editorial')|list %}Edit editors' introduction{% else %}Create editors' introduction{% endif %}</button>
+    </form>
     <a class="button ghost" href="{{ url_for('issue_pdf', issue_id=issue['id']) }}" target="_blank">View issue PDF</a>
     <a class="button ghost" href="{{ url_for('issue_crossref_xml', issue_id=issue['id']) }}">Download CrossRef XML</a>
   </nav>

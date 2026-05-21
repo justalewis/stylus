@@ -291,6 +291,54 @@ def register_routes(app: Flask):
             return redirect(url_for("issue_home", issue_id=issue_id))
         return render_template("issue_metadata.html", issue=issue)
 
+    @app.route("/issues/<int:issue_id>/create-editor-intro", methods=["POST"])
+    @login_required
+    def issue_create_editor_intro(issue_id):
+        issue = db.query_one(
+            "SELECT i.*, j.slug AS journal_slug FROM issues i "
+            "JOIN journals j ON i.journal_id = j.id WHERE i.id = ?",
+            (issue_id,),
+        )
+        if not issue:
+            abort(404)
+
+        existing = db.query_one(
+            "SELECT * FROM articles WHERE issue_id = ? AND kind = 'editorial'",
+            (issue_id,),
+        )
+        if existing:
+            return redirect(url_for("article_edit", article_id=existing["id"]))
+
+        islug = conversion.issue_slug_for(issue["volume"], issue["issue_number"], issue["year"])
+        article_slug = f"editors-introduction-{issue['volume']}-{issue['issue_number']}-{issue['year']}"
+        apath = conversion.article_dir(issue["journal_slug"], islug, article_slug)
+
+        title = f"Editors' Introduction to Issue {issue['volume']}.{issue['issue_number']}"
+        initial_body = (
+            "Write the editors' introduction here in Markdown. "
+            "This text becomes pages VI–VII (or however many it needs) "
+            "of the front matter when you assemble the issue.\n\n"
+            "Close with a signature line like:\n\n"
+            "*—Editor One, Editor Two, and Editor Three*\n"
+        )
+        article_md = (
+            "---\n"
+            f"title: {title}\n"
+            "kind: editorial\n"
+            "---\n\n"
+            f"{initial_body}"
+        )
+        (apath / "article.md").write_text(article_md, encoding="utf-8")
+
+        article_id = db.execute(
+            "INSERT INTO articles (journal_id, issue_id, slug, title, project_path, "
+            "kind, section, status) "
+            "VALUES (?, ?, ?, ?, ?, 'editorial', 'FRONT MATTER', 'draft')",
+            (issue["journal_id"], issue_id, article_slug, title, str(apath)),
+        )
+        flash("Editors' introduction created. Edit the Markdown below.", "success")
+        return redirect(url_for("article_edit", article_id=article_id))
+
     @app.route("/issues/<int:issue_id>/add-article", methods=["POST"])
     @login_required
     def issue_add_article(issue_id):
@@ -544,7 +592,7 @@ def register_routes(app: Flask):
             updated = dict(fm)
             for key in (
                 "title", "subtitle", "short-title", "short-authors", "footer",
-                "doi", "abstract", "status", "copyright",
+                "doi", "abstract", "status", "copyright", "section",
                 "journal", "volume", "issue", "year",
             ):
                 form_key = key.replace("-", "_")
@@ -601,16 +649,13 @@ def register_routes(app: Flask):
                 return redirect(request.url)
 
             conversion.write_article_metadata(apath, updated, body)
-            if updated.get("title") != article["title"]:
-                db.execute(
-                    "UPDATE articles SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (updated["title"], article_id),
-                )
-            else:
-                db.execute(
-                    "UPDATE articles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (article_id,),
-                )
+            new_title = updated.get("title")
+            new_section = updated.get("section")
+            db.execute(
+                "UPDATE articles SET title = COALESCE(?, title), section = COALESCE(?, section), "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (new_title, new_section, article_id),
+            )
 
             render_result = conversion.render_all(apath, article["journal_slug"])
             if render_result.errors:
@@ -632,12 +677,27 @@ def register_routes(app: Flask):
         if isinstance(authors_list, dict):
             authors_list = [authors_list]
 
+        journal_row = db.query_one(
+            "SELECT toc_sections_json FROM journals WHERE id = ?",
+            (article["journal_id"],),
+        )
+        import json
+        toc_sections = []
+        if journal_row and journal_row["toc_sections_json"]:
+            try:
+                toc_sections = json.loads(journal_row["toc_sections_json"]) or []
+            except Exception:
+                pass
+        if not toc_sections:
+            toc_sections = ["ARTICLES"]
+
         return render_template(
             "metadata.html",
             article=article,
             fm=fm,
             authors=authors_list,
             keywords_str=kw_string,
+            toc_sections=toc_sections,
         )
 
     @app.route("/articles/<int:article_id>/edit", methods=["GET", "POST"])

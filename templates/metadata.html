@@ -74,6 +74,15 @@
           <option value="published" {% if current_status == 'published' %}selected{% endif %}>published</option>
         </select>
       </label>
+      <label>ToC section
+        <select name="section">
+          {% set current_section = fm.get('section') or article['section'] or toc_sections[0] %}
+          {% for s in toc_sections %}
+          <option value="{{ s }}" {% if current_section == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+        <span class="help-text">Groups the article under this label in the issue's ToC.</span>
+      </label>
     </div>
 
     <div class="section-divider">
