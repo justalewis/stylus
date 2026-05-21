@@ -993,6 +993,8 @@ def register_routes(app: Flask):
         ("09-crossref", "CrossRef Deposit"),
         ("10-troubleshooting", "Troubleshooting & FAQ"),
         ("11-developers", "For Developers"),
+        ("12-installation", "Installation"),
+        ("13-customization", "Adding a new journal"),
     ]
 
     @app.route("/help")

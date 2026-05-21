@@ -392,7 +392,10 @@ def render_html(article_path: Path, journal_slug: str) -> Path:
     tpl = template_dir(journal_slug)
     template = tpl / "article.html.j2"
     css = tpl / "article.css"
-    lua_filter = tpl / "lics-filter.lua"
+    lua_filter = tpl / "journal-filter.lua"
+    if not lua_filter.exists():
+        # Backward compat: older bundles used the journal-specific name
+        lua_filter = tpl / "lics-filter.lua"
 
     extra = [
         "--standalone",
@@ -431,7 +434,10 @@ def render_pdf(article_path: Path, journal_slug: str) -> Path:
     out = article_path / "article.pdf"
     tpl = template_dir(journal_slug)
     typ_template = tpl / "article.typ"
-    lua_filter = tpl / "lics-filter.lua"
+    lua_filter = tpl / "journal-filter.lua"
+    if not lua_filter.exists():
+        # Backward compat: older bundles used the journal-specific name
+        lua_filter = tpl / "lics-filter.lua"
     typst_input = article_path / "article.typ"
 
     extra = [f"--template={typ_template}"]
@@ -1162,5 +1168,4 @@ def _typst_wordmark_block(rel_path: Optional[str], out_dir: Path, fallback: str)
     return (
         f'\n#v(1.5in)\n'
         f'#align(center, text(size: 96pt, weight: 700, font: ("Helvetica Neue", "Helvetica", "Arial"), {_typst_str(fallback)}))\n'
-        f'#align(center, text(size: 18pt, font: ("Helvetica Neue", "Helvetica", "Arial"), {_typst_str("Literacy in Composition Studies" if fallback == "LiCS" else "")}))\n'
     )
