@@ -834,13 +834,14 @@ def _structured_team_typst(team_json: Optional[str]) -> str:
         name = (ed.get("name") or "").strip()
         inst = (ed.get("institution") or "").strip()
         cell = (
-            "block(width: 100%, inset: (top: 0.4em, bottom: 0.4em), [\n"
+            "block(width: 100%, inset: (top: 0.45em, bottom: 0.45em), [\n"
             "  #set par(first-line-indent: 0pt, justify: false, leading: 0.55em)\n"
             "  #set align(center)\n"
-            f"  #text(weight: \"bold\", {_typst_str(role)})\n"
+            f"  #text(size: 8.5pt, tracking: 0.12em, fill: rgb(\"#4a4137\"), smallcaps({_typst_str(role)}))\n"
             "  #linebreak()\n"
+            f"  #v(0.15em)\n"
             f"  #text({_typst_str(name)})\n"
-            + (f"  #linebreak()\n  #text(style: \"italic\", {_typst_str(inst)})\n" if inst else "")
+            + (f"  #linebreak()\n  #text(style: \"italic\", fill: rgb(\"#4a4137\"), {_typst_str(inst)})\n" if inst else "")
             + "])"
         )
         cells.append(cell)
