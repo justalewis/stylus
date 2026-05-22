@@ -1,0 +1,302 @@
+{% extends "base.html" %}
+{% block title %}Edit (TinyMCE) | {{ article['title'] }}{% endblock %}
+{% block head %}
+<style>
+  .editor-host { min-height: 70vh; background: var(--paper); border: 1px solid var(--rule); border-radius: var(--radius-sm); }
+  .save-bar { display: flex; gap: var(--space-3); align-items: center; padding: var(--space-3) 0; flex-wrap: wrap; }
+  .save-status { color: var(--muted); font-size: var(--text-sm); }
+  /* TinyMCE styles its own UI; this is just for the outer container. */
+  .tox-tinymce { border-color: var(--rule) !important; border-radius: var(--radius-sm) !important; }
+</style>
+<!--
+  TinyMCE 6 (MIT-licensed) from jsDelivr. No API key required, no
+  registration prompt, no usage tracking. The community edition includes
+  all the plugins we configure below.
+-->
+<script src="https://cdn.jsdelivr.net/npm/tinymce@6.8.5/tinymce.min.js" referrerpolicy="origin"></script>
+{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Edit: {{ article['title'] }}</h1>
+  <p class="dim">
+    Rich-toolbar WYSIWYG editing via TinyMCE. The editor works on an HTML
+    transcoding of your article; on save we convert back to Markdown.
+    Round-trip preserves: headings, bold/italic/underline, lists, tables,
+    blockquotes, links, images, code, footnotes. Subtle differences may
+    appear in spacing and typography on save.
+    &middot; <a href="{{ url_for('article_home', article_id=article['id']) }}">Back</a>
+    &middot; <a href="{{ url_for('article_edit', article_id=article['id']) }}">Edit as Markdown</a>
+    &middot; <a href="{{ url_for('article_edit_wysiwyg', article_id=article['id']) }}">Lightweight WYSIWYG</a>
+  </p>
+
+  <div class="save-bar">
+    <button type="button" class="button" id="save-btn">Save</button>
+    <a class="button ghost" href="{{ url_for('article_home', article_id=article['id']) }}">Back</a>
+    <span class="save-status" id="save-status"></span>
+  </div>
+
+  <textarea id="tinymce-host">{{ html_body|safe }}</textarea>
+  <script id="asset-upload-config" type="application/json">{{ {'upload_url': url_for('article_upload_asset', article_id=article['id'])} | tojson }}</script>
+</section>
+
+<script>
+  const uploadUrl = JSON.parse(document.getElementById('asset-upload-config').textContent).upload_url;
+
+  // TinyMCE init. The plugin and toolbar lists are tuned for scholarly
+  // article authoring: real table editor, font controls, alignment,
+  // accessible link/image dialogs, find/replace, footnotes via custom
+  // button, paste-from-Word handling, source-code escape hatch.
+  tinymce.init({
+    selector: 'textarea#tinymce-host',
+    license_key: 'gpl',           // open-source license declaration
+    height: '70vh',
+    menubar: 'edit view insert format tools table',
+    plugins: [
+      'advlist', 'autolink', 'lists', 'link', 'image', 'charmap',
+      'preview', 'anchor', 'searchreplace', 'visualblocks', 'code',
+      'fullscreen', 'insertdatetime', 'media', 'table', 'help',
+      'wordcount', 'codesample', 'pagebreak', 'nonbreaking', 'quickbars',
+      'visualchars', 'autosave', 'directionality',
+    ],
+    // Three rows of toolbar for full layout control. Row 1 = block/font
+    // family/size; row 2 = inline formatting + colors; row 3 = alignment
+    // + lists + indentation + structure inserts. Visible buttons can be
+    // hidden via the menubar / toolbar_groups if it feels noisy.
+    toolbar: [
+      'undo redo | blocks styles fontfamily fontsize lineheight',
+      'bold italic underline strikethrough subscript superscript | forecolor backcolor removeformat',
+      'alignleft aligncenter alignright alignjustify | bullist numlist outdent indent ltr rtl | link unlink anchor image media table hr blockquote codesample charmap | searchreplace visualblocks visualchars code fullscreen preview help',
+    ].join(' | '),
+    // Line height options — added via the lineheight button (TinyMCE 6+).
+    line_height_formats: '1 1.15 1.25 1.5 1.75 2',
+    // Indentation in named steps so users have predictable level changes.
+    indent_use_margin: false,
+    // Custom style presets surfaced via the "Styles" menu in the toolbar.
+    // These give one-click access to journal-specific block treatments.
+    style_formats: [
+      { title: 'Headings', items: [
+        { title: 'Heading 1', format: 'h1' },
+        { title: 'Heading 2', format: 'h2' },
+        { title: 'Heading 3', format: 'h3' },
+        { title: 'Heading 4', format: 'h4' },
+        { title: 'Heading 5', format: 'h5' },
+        { title: 'Heading 6', format: 'h6' },
+      ]},
+      { title: 'Inline', items: [
+        { title: 'Small caps', inline: 'span', styles: { 'font-variant-caps': 'small-caps' } },
+        { title: 'Highlight (mark)', inline: 'mark' },
+        { title: 'Keyboard input', inline: 'kbd' },
+        { title: 'Abbreviation', inline: 'abbr' },
+        { title: 'Cite (work title)', inline: 'cite' },
+      ]},
+      { title: 'Blocks', items: [
+        { title: 'Blockquote', block: 'blockquote' },
+        { title: 'Pull quote', block: 'aside', classes: 'pullquote' },
+        { title: 'Epigraph', block: 'div', classes: 'epigraph' },
+        { title: 'Sidebar callout', block: 'aside', classes: 'callout' },
+        { title: 'Preformatted', block: 'pre' },
+      ]},
+      { title: 'Alignment', items: [
+        { title: 'Left',    block: 'div', styles: { 'text-align': 'left' } },
+        { title: 'Center',  block: 'div', styles: { 'text-align': 'center' } },
+        { title: 'Right',   block: 'div', styles: { 'text-align': 'right' } },
+        { title: 'Justify', block: 'div', styles: { 'text-align': 'justify' } },
+      ]},
+      { title: 'Image', items: [
+        { title: 'Float left (text wraps right)',  selector: 'img', styles: { 'float': 'left',  'margin': '0 1rem 0.5rem 0' } },
+        { title: 'Float right (text wraps left)',  selector: 'img', styles: { 'float': 'right', 'margin': '0 0 0.5rem 1rem' } },
+        { title: 'Center block',                   selector: 'img', styles: { 'display': 'block', 'margin': '1rem auto' } },
+        { title: 'Inline',                         selector: 'img', styles: { 'float': 'none', 'display': 'inline', 'margin': '0' } },
+      ]},
+    ],
+    style_formats_merge: false,
+
+    // Quickbars: context-sensitive toolbar that pops up next to a
+    // selection. Lets users do common formatting without leaving the
+    // text. Disabled by default in our config (`quickbars` plugin is
+    // loaded but configured minimally) so power users can opt in.
+    quickbars_selection_toolbar: 'bold italic underline | quicklink h1 h2 h3 blockquote',
+    quickbars_insert_toolbar: 'image table hr',
+
+    // Better image dialog with title, alt, dimensions, caption,
+    // alignment classes.
+    image_caption: true,
+    image_advtab: true,
+    image_title: true,
+    image_dimensions: true,
+    image_class_list: [
+      { title: 'Default', value: '' },
+      { title: 'Float left', value: 'float-left' },
+      { title: 'Float right', value: 'float-right' },
+      { title: 'Center block', value: 'center-block' },
+    ],
+
+    // Show table-cell column-resize handles + advanced row/column
+    // properties dialogs.
+    table_resize_bars: true,
+    table_advtab: true,
+    table_row_advtab: true,
+    table_cell_advtab: true,
+    table_appearance_options: true,
+    table_grid: true,
+    table_default_attributes: { border: '1' },
+    table_default_styles: { 'border-collapse': 'collapse', 'width': '100%' },
+    table_class_list: [
+      { title: 'Default (hairline rules)', value: '' },
+      { title: 'No borders', value: 'no-borders' },
+      { title: 'Striped rows', value: 'striped' },
+      { title: 'Compact', value: 'compact' },
+    ],
+
+    // Spell check (browser native).
+    browser_spellcheck: true,
+    contextmenu: 'link image table | searchreplace | spellchecker',
+
+    // Reasonable defaults for a print-oriented article.
+    contextmenu_avoid_overlap: '.tox-tinymce',
+    block_formats: 'Paragraph=p; Heading 1=h1; Heading 2=h2; Heading 3=h3; Heading 4=h4; Heading 5=h5; Heading 6=h6; Blockquote=blockquote; Preformatted=pre',
+    font_family_formats:
+      'Garamond=EB Garamond, Garamond, Georgia, serif;' +
+      'Sans=Inter, sans-serif;' +
+      'Serif=Georgia, serif;' +
+      'Mono=ui-monospace, Menlo, Consolas, monospace',
+    content_style:
+      'body { font-family: "EB Garamond", "Garamond", Georgia, serif;' +
+      ' font-size: 14pt; line-height: 1.55; color: #1a1612;' +
+      ' max-width: 6.5in; margin: 1rem auto; padding: 0 1rem; }' +
+      ' h1, h2, h3 { font-family: "EB Garamond", Garamond, serif; color: #2c4a3a; }' +
+      ' table { border-collapse: collapse; width: 100%; margin: 1rem 0; }' +
+      ' td, th { border: 1px solid #b6a98c; padding: 6px 10px; vertical-align: top; }' +
+      ' th { background: #f3ecda; }' +
+      ' blockquote { border-left: 3px solid #b6a98c; padding-left: 1rem; color: #4a4137; font-style: italic; }',
+    // Paste-from-Word: strip Microsoft Office cruft aggressively.
+    // Word's HTML output is famously bloated — every span carries
+    // attributes like `style="mso-fareast-font-family:'Times New Roman';
+    // mso-bidi-font-family:'EB Garamond'; ..."` that have no rendering
+    // effect but balloon the file and confuse Pandoc's HTML→MD
+    // converter (which then falls back to raw HTML for any element it
+    // can't classify, which means tables don't survive to the PDF).
+    //
+    // paste_postprocess runs after TinyMCE's own paste cleanup and
+    // lets us remove style attributes, mso-* classes, lang attrs, and
+    // Word's bookmark/comment artifacts.
+    paste_data_images: true,
+    paste_as_text: false,
+    paste_remove_styles_if_webkit: true,
+    paste_webkit_styles: 'none',
+    paste_merge_formats: true,
+    paste_word_valid_elements:
+      'p,strong,em,b,i,u,sub,sup,br,hr,ul,ol,li,h1,h2,h3,h4,h5,h6,' +
+      'blockquote,table,thead,tbody,tfoot,tr,th,td,colgroup,col,' +
+      'a[href|title],img[src|alt|title|width|height]',
+    paste_postprocess: function(plugin, args) {
+      // `args.node` is a DOM fragment of the pasted content. Walk it
+      // and strip every `style` attribute, every Word-style class
+      // (`Mso*`), every `lang` attribute, and bookmark anchors.
+      const root = args.node;
+      root.querySelectorAll('*').forEach(el => {
+        el.removeAttribute('style');
+        el.removeAttribute('lang');
+        // Word emits classes like "MsoNormal", "MsoListParagraph".
+        if (el.className && /^(Mso|x-|w-)/.test(el.className)) {
+          el.removeAttribute('class');
+        }
+        // Remove Word bookmark / comment range artifacts.
+        if (el.tagName === 'A' && el.getAttribute('name') &&
+            /^_(Toc|Ref|Hlk|GoBack)/.test(el.getAttribute('name'))) {
+          el.replaceWith(...el.childNodes);
+        }
+        // Remove proprietary tags Word emits.
+        if (['O:P', 'V:SHAPE', 'V:IMAGEDATA', 'W:SDT', 'M:OMATH'].includes(el.tagName)) {
+          el.replaceWith(...el.childNodes);
+        }
+      });
+      // Collapse runs of nbsp into normal spaces.
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let n;
+      while ((n = walker.nextNode())) {
+        n.nodeValue = n.nodeValue.replace(/ +/g, ' ');
+      }
+    },
+
+    // Table defaults: classical hairline-rule look.
+    table_default_attributes: { border: '1' },
+    table_default_styles: { 'border-collapse': 'collapse', 'width': '100%' },
+    table_class_list: [
+      { title: 'Default', value: '' },
+      { title: 'No borders', value: 'no-borders' },
+      { title: 'Striped', value: 'striped' },
+    ],
+
+    // Custom image upload handler: route uploads to the article's
+    // /upload-asset endpoint so files land in assets/ alongside the
+    // article (not embedded as base64).
+    images_upload_handler: async (blobInfo, progress) => {
+      const fd = new FormData();
+      fd.append('asset', blobInfo.blob(), blobInfo.filename());
+      const r = await fetch(uploadUrl, { method: 'POST', body: fd });
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.error || 'upload failed');
+      // Return the relative URL TinyMCE should embed in the <img src>.
+      return data.path;
+    },
+    automatic_uploads: true,
+    images_reuse_filename: false,
+
+    // Autosave: keeps a local-storage copy if browser closes mid-edit.
+    autosave_ask_before_unload: true,
+    autosave_interval: '20s',
+    autosave_retention: '30m',
+
+    // Smart spacing.
+    nonbreaking_force_tab: true,
+
+    // Allow user to insert <hr>, <pagebreak>, etc.
+    pagebreak_separator: '<!-- pagebreak -->',
+
+    // Don't strip footnote-friendly HTML (sup/sub etc.).
+    valid_elements: '*[*]',
+    extended_valid_elements: 'sup,sub,kbd,abbr,var',
+
+    branding: false,  // hide "Powered by TinyMCE"
+    promotion: false, // hide premium-upsell links
+
+    setup: (editor) => {
+      editor.on('init', () => {
+        editor.focus();
+      });
+    },
+  });
+
+  // Save handler: pull HTML out of TinyMCE, POST to server.
+  const saveBtn = document.getElementById('save-btn');
+  const saveStatus = document.getElementById('save-status');
+  async function save() {
+    saveStatus.textContent = 'Saving...';
+    saveBtn.disabled = true;
+    try {
+      const body = tinymce.activeEditor.getContent();
+      const r = await fetch(window.location.pathname, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      });
+      const data = await r.json();
+      saveStatus.textContent = data.ok
+        ? `Saved (${data.bytes} bytes)`
+        : `Save failed: ${data.error || 'unknown'}`;
+    } catch (e) {
+      saveStatus.textContent = 'Save failed: ' + e;
+    } finally {
+      saveBtn.disabled = false;
+    }
+  }
+  saveBtn.addEventListener('click', save);
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      e.preventDefault();
+      save();
+    }
+  });
+</script>
+{% endblock %}

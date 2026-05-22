@@ -43,23 +43,58 @@ def issue_slug_for(volume, issue_number, year) -> str:
     return f"v{volume}-n{issue_number}-{year}"
 
 
-def move_article_to_issue(article_path: Path, journal_slug: str, issue_slug: str, article_slug: str) -> Path:
-    """Move an article directory to its issue location. Returns new path."""
+def _resolve_move_destination(dest: Path) -> Path:
+    """Return a usable destination path for a move.
+
+    - If `dest` doesn't exist → return it.
+    - If `dest` exists but is "effectively empty" (no `article.md` inside,
+      so it's stale leftover from an earlier failed operation) → remove
+      it and return the same path.
+    - If `dest` exists and contains a real article (`article.md`) → pick
+      a disambiguated suffix `-2`, `-3`, … so the move can proceed.
+    This keeps the remove/move operations from getting permanently stuck
+    on orphan directories without ever silently overwriting real content.
+    """
     import shutil
-    dest = CONTENT_DIR / "journals" / journal_slug / "issues" / issue_slug / "articles" / article_slug
-    if dest.exists():
-        raise FileExistsError(f"Destination already exists: {dest}")
+    if not dest.exists():
+        return dest
+    article_md = dest / "article.md"
+    if not article_md.exists():
+        # Stale leftover — safe to drop.
+        shutil.rmtree(dest, ignore_errors=True)
+        return dest
+    # Real content lives there. Pick a non-colliding sibling.
+    base = dest.name
+    parent = dest.parent
+    n = 2
+    while True:
+        candidate = parent / f"{base}-{n}"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
+def move_article_to_issue(article_path: Path, journal_slug: str, issue_slug: str, article_slug: str) -> Path:
+    """Move an article directory to its issue location. Returns new path.
+
+    Stale empty leftovers are cleaned up; real conflicts auto-disambiguate.
+    """
+    import shutil
+    target = CONTENT_DIR / "journals" / journal_slug / "issues" / issue_slug / "articles" / article_slug
+    dest = _resolve_move_destination(target)
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(article_path), str(dest))
     return dest
 
 
 def move_article_to_unfiled(article_path: Path, journal_slug: str, article_slug: str) -> Path:
-    """Move an article directory back to _unfiled. Returns new path."""
+    """Move an article directory back to _unfiled. Returns new path.
+
+    Stale empty leftovers are cleaned up; real conflicts auto-disambiguate.
+    """
     import shutil
-    dest = CONTENT_DIR / "journals" / journal_slug / "_unfiled" / article_slug
-    if dest.exists():
-        raise FileExistsError(f"Destination already exists: {dest}")
+    target = CONTENT_DIR / "journals" / journal_slug / "_unfiled" / article_slug
+    dest = _resolve_move_destination(target)
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(article_path), str(dest))
     return dest
@@ -386,7 +421,238 @@ def _citation_args(article_path: Path, journal_slug: str) -> list[str]:
     return args
 
 
+def _normalize_media_paths(md_text: str) -> str:
+    """Rewrite any image reference whose path is absolute (or otherwise
+    points outside the article directory) into a relative `assets/...`
+    reference.
+
+    Pandoc's `--extract-media=DIR` bakes whatever DIR was passed into the
+    Markdown — absolute or relative. We pass an absolute path during
+    ingest so Pandoc knows where to write the files, but that produces
+    brittle Markdown: if the article directory is later renamed or
+    case-normalized (which Windows does silently), the baked path goes
+    stale and renders fail with "file not found." Worse, the baked path
+    can contain `\\_` sequences that Markdown then interprets as escaped
+    underscores, mangling the directory name.
+
+    Strategy: for every Markdown image reference, look for the substring
+    `assets/` (case-insensitive, slash-normalized) and rewrite the path
+    to start from there. The article's own `assets/` directory is the
+    canonical home of all extracted media, so this works regardless of
+    what absolute path Pandoc originally inserted.
+    """
+    import re
+
+    def fix(m: re.Match) -> str:
+        raw_path = m.group(1).strip()
+        # Strip any leading/trailing whitespace artifacts; ignore titles
+        # that may follow a space (rare for media paths).
+        # Normalize slashes and Markdown-escaped underscores so we can
+        # search for "assets/" reliably. Also handle URL-percent-encoded
+        # backslashes (`%5C`) and underscores (`%5F`) — the WYSIWYG/
+        # ProseMirror serializer URL-encodes spaces/specials in image
+        # `src` attributes, which then survives back into the Markdown
+        # after a save round-trip.
+        import urllib.parse
+        normalized = urllib.parse.unquote(raw_path)
+        normalized = (
+            normalized.replace("\\_", "_")
+                      .replace("\\\\", "\\")
+                      .replace("\\", "/")
+        )
+        lower = normalized.lower()
+        idx = lower.rfind("/assets/")
+        if idx >= 0:
+            rel = normalized[idx + 1:]  # drop leading slash
+        elif lower.startswith("assets/"):
+            rel = normalized
+        else:
+            # No "assets/" anywhere — leave as-is. Could be a remote URL
+            # or an unrelated reference.
+            return m.group(0)
+        return f"]({rel})"
+
+    # Match Markdown image refs: ](PATH) where PATH has no spaces and no
+    # closing paren. Pandoc's image syntax emits attribute blocks via
+    # `{...}` after the closing paren, so we don't need to consume them.
+    return re.sub(r"\]\(([^)\s]+)\)", fix, md_text)
+
+
+def _repair_media_paths_in_file(md_path: Path) -> bool:
+    """Read `md_path`, apply media-path normalization, write back only
+    if the content changed. Returns True if a repair was made.
+
+    Two passes:
+      1. Structural: any image whose path contains `/assets/` gets
+         rewritten to a clean relative `assets/...` path (the
+         `_normalize_media_paths` function).
+      2. Filesystem-aware: any image path that doesn't resolve as-is
+         but DOES resolve when prefixed with `assets/` gets rewritten.
+         This catches the case where an HTML round-trip (TinyMCE) or
+         manual edit dropped the `assets/` prefix from a Pandoc-style
+         `assets/media/<hash>.png` reference.
+    """
+    if not md_path.exists():
+        return False
+    import re
+    article_dir = md_path.parent
+    original = md_path.read_text(encoding="utf-8")
+    text = _normalize_media_paths(original)
+
+    # Filesystem-aware second pass.
+    def fix_with_filesystem(m: re.Match) -> str:
+        path_str = m.group(1).strip()
+        # External URLs left alone.
+        if path_str.startswith(("http://", "https://", "data:", "//")):
+            return m.group(0)
+        # Already absolute and exists? Leave alone (rare).
+        candidate = (article_dir / path_str)
+        if candidate.exists():
+            return m.group(0)
+        # Try with `assets/` prefix.
+        with_assets = article_dir / "assets" / path_str
+        if with_assets.exists():
+            return f"]({('assets/' + path_str).replace(chr(92), '/')})"
+        # Try the filename alone, searched recursively under assets/.
+        # Useful when the path is something like `0ac81ab3.png` with no
+        # directory at all.
+        assets_root = article_dir / "assets"
+        if assets_root.exists():
+            name_only = Path(path_str).name
+            for found in assets_root.rglob(name_only):
+                if found.is_file():
+                    rel = found.relative_to(article_dir).as_posix()
+                    return f"]({rel})"
+        return m.group(0)
+
+    text = re.sub(r"\]\(([^)\s]+)\)", fix_with_filesystem, text)
+
+    if text != original:
+        md_path.write_text(text, encoding="utf-8")
+        return True
+    return False
+
+
+def check_missing_image_references(article_path: Path) -> list[str]:
+    """Return a list of image src paths referenced in article.md that
+    don't resolve on disk. Empty list = all images present.
+
+    External URLs and data: URIs are not checked (assumed valid).
+    Used as a pre-render gate so the editor sees a friendly error
+    listing exactly which files to provide, instead of the cryptic
+    Typst-level "file not found" message that only surfaces the first
+    one.
+    """
+    md_path = article_path / "article.md"
+    if not md_path.exists():
+        return []
+    import re
+    text = md_path.read_text(encoding="utf-8")
+    missing: list[str] = []
+    seen: set[str] = set()
+    for m in re.finditer(r"!\[[^\]]*\]\(([^)\s]+)\)", text):
+        src = m.group(1).strip()
+        if src in seen:
+            continue
+        seen.add(src)
+        if src.startswith(("http://", "https://", "data:", "//")):
+            continue
+        candidate = article_path / src
+        if not candidate.exists():
+            missing.append(src)
+    return missing
+
+
+def _repair_markdown_quirks_in_file(md_path: Path) -> bool:
+    """Apply idempotent markdown repairs that fix Pandoc DOCX-writer
+    bugs. Currently:
+      - `\\**` close-of-bold escape (table-cell blockquote shape).
+      - Collapsed grid tables (all rows on one physical line).
+    Composed so existing articles auto-heal on next render without
+    needing a manual re-cleanup pass."""
+    if not md_path.exists():
+        return False
+    import re
+    original = md_path.read_text(encoding="utf-8")
+    text = original
+
+    # Repair 1: `\**` → `**` (broken bold-close inside table cells).
+    text = re.sub(r"(?<!\\)\\\*\*", "**", text)
+
+    # Repair 1b: strip stray escaped-pipe sequences inside table cells.
+    # Word-pasted table cells sometimes end with `\|` literals that were
+    # supposed to be cell-edge markers but escaped — they then render as
+    # visible "|" in the rendered output. Pandoc emits these as `\|`
+    # inside cell content. Since legitimate use of `\|` in scholarly
+    # prose is extremely rare, we strip them globally.
+    text = re.sub(r"\\\|", "", text)
+
+    # Repair 2: unescape and split footnote definitions
+    # (`\[^1\]:` → `[^1]:`, plus force a blank line before each).
+    text = re.sub(r"\\\[\^([^\]]+)\\\]:", r"[^\1]:", text)
+    text = re.sub(r"([^\n])(\s*\[\^[^\]]+\]:)", r"\1\n\n\2", text)
+
+    # Repair 2b: collapse blank lines inserted BETWEEN grid-table rows.
+    # Pandoc's HTML→MD writer with very wide content sometimes emits
+    # tables with `\n\n` between each separator and content row, which
+    # breaks Pandoc's own grid-table reader. The repair: any blank line
+    # sandwiched between two lines that both look like table rows
+    # (start with `+` separator or `|` content) gets dropped.
+    new_lines: list[str] = []
+    prev: str = ""
+    pending_blank: bool = False
+    def _is_table_line(s: str) -> bool:
+        s = s.lstrip()
+        return s.startswith("+") and "---" in s or s.startswith("|")
+    for line in text.split("\n"):
+        if line.strip() == "":
+            pending_blank = True
+            continue
+        if pending_blank:
+            if _is_table_line(prev) and _is_table_line(line):
+                # Drop the pending blank; it's an artifact between
+                # table rows.
+                pass
+            else:
+                new_lines.append("")
+            pending_blank = False
+        new_lines.append(line)
+        prev = line
+    if pending_blank:
+        new_lines.append("")
+    text = "\n".join(new_lines)
+
+    # Repair 3: re-split grid tables collapsed onto a single line.
+    sep_re = re.compile(r"\+[\-+:]{3,}\+")
+    new_lines = []
+    for line in text.split("\n"):
+        seps = list(sep_re.finditer(line))
+        if len(seps) < 2:
+            new_lines.append(line)
+            continue
+        out: list[str] = []
+        cursor = 0
+        for m in seps:
+            between = line[cursor:m.start()].strip()
+            if between:
+                out.append(between)
+            out.append(m.group(0))
+            cursor = m.end()
+        tail = line[cursor:].strip()
+        if tail:
+            out.append(tail)
+        new_lines.append("\n".join(out))
+    text = "\n".join(new_lines)
+
+    if text != original:
+        md_path.write_text(text, encoding="utf-8")
+        return True
+    return False
+
+
 def render_html(article_path: Path, journal_slug: str) -> Path:
+    _repair_media_paths_in_file(article_path / "article.md")
+    _repair_markdown_quirks_in_file(article_path / "article.md")
     md = article_path / "article.md"
     out = article_path / "article.html"
     tpl = template_dir(journal_slug)
@@ -430,6 +696,77 @@ def render_html(article_path: Path, journal_slug: str) -> Path:
     return out
 
 
+def _typst_escape_string(s: str) -> str:
+    """Escape a Python string so it survives as a Typst "..." literal.
+
+    Typst string literals use C-style escapes: backslash and double-quote
+    need to be backslashed; newlines and tabs get their escape sequences
+    so we don't accidentally break out of the string."""
+    return (
+        s.replace("\\", "\\\\")
+         .replace('"', '\\"')
+         .replace("\n", "\\n")
+         .replace("\r", "")
+         .replace("\t", "\\t")
+    )
+
+
+def _fill_typst_authors(typ_text: str, fm: dict) -> str:
+    """Replace the GRAPHION_AUTHORS_PLACEHOLDER and
+    GRAPHION_KEYWORDS_PLACEHOLDER sentinels in the rendered article.typ
+    with properly-escaped string tuples drawn from the article's YAML
+    metadata.
+
+    Pandoc's Typst writer doesn't escape embedded quotes inside
+    string-literal substitution context, which breaks Typst on values
+    that contain quotes (or on corrupted metadata that surfaces when
+    ingest misclassifies body prose as authors). Doing this in Python
+    with proper escaping makes the render robust regardless of input
+    quality. Both `document.author` and `document.keywords` in Typst
+    require `array of str` — content syntax (`[...]`) is rejected with
+    'expected string or array, found content'.
+    """
+    # Authors.
+    authors = fm.get("author") or []
+    names: list[str] = []
+    for a in authors:
+        if isinstance(a, dict):
+            name = (a.get("name") or "").strip()
+        else:
+            name = str(a).strip()
+        if not name:
+            continue
+        names.append(name)
+    if not names:
+        # Typst requires at least one author when `author:` is set;
+        # use an empty-string placeholder so the document still parses.
+        authors_inner = '""'
+    else:
+        authors_inner = ", ".join(f'"{_typst_escape_string(n)}"' for n in names)
+    typ_text = typ_text.replace("GRAPHION_AUTHORS_PLACEHOLDER", authors_inner)
+
+    # Keywords. YAML stores them either as a comma/semicolon string or
+    # an actual list. Normalize either form into a list of strings.
+    raw_kw = fm.get("keywords")
+    if isinstance(raw_kw, list):
+        kw_items = [str(k).strip() for k in raw_kw if str(k).strip()]
+    elif isinstance(raw_kw, str) and raw_kw.strip():
+        import re as _re_kw
+        kw_items = [s.strip() for s in _re_kw.split(r"[;,]", raw_kw) if s.strip()]
+    else:
+        kw_items = []
+    if kw_items:
+        keywords_inner = ", ".join(
+            f'"{_typst_escape_string(k)}"' for k in kw_items
+        )
+    else:
+        # Empty array is valid for keywords — keep the call site clean.
+        keywords_inner = ""
+    typ_text = typ_text.replace("GRAPHION_KEYWORDS_PLACEHOLDER", keywords_inner)
+
+    return typ_text
+
+
 def render_pdf(article_path: Path, journal_slug: str) -> Path:
     """Render PDF via Pandoc (Typst template) + typst-py compile.
 
@@ -437,6 +774,20 @@ def render_pdf(article_path: Path, journal_slug: str) -> Path:
     journal's Pandoc Typst template, and writes article.typ. The typst
     Python package then compiles that to article.pdf.
     """
+    _repair_media_paths_in_file(article_path / "article.md")
+    _repair_markdown_quirks_in_file(article_path / "article.md")
+    missing = check_missing_image_references(article_path)
+    if missing:
+        # Limit the listed paths so the flash isn't enormous.
+        sample = missing[:8]
+        more = f" (and {len(missing) - 8} more)" if len(missing) > 8 else ""
+        raise FileNotFoundError(
+            "Article references images that do not exist in this article's "
+            "directory. Upload the missing files via the article page's "
+            "'Upload assets' form (or copy them into the article's assets/ "
+            "subdirectory), then re-render. Missing: "
+            + ", ".join(sample) + more
+        )
     md = article_path / "article.md"
     out = article_path / "article.pdf"
     tpl = template_dir(journal_slug)
@@ -462,8 +813,111 @@ def render_pdf(article_path: Path, journal_slug: str) -> Path:
         extra_args=extra,
     )
 
+    # Post-process: fill in the author tuple from YAML with proper Typst
+    # escaping. The template emits a GRAPHION_AUTHORS_PLACEHOLDER sentinel
+    # which we substitute here so embedded quotes in author names don't
+    # blow up the Typst parser.
+    fm, _ = read_article_metadata(article_path)
+    typ_text = typst_input.read_text(encoding="utf-8")
+    typ_text = _fill_typst_authors(typ_text, fm)
+    # Drop any `#link(<label>)[...]` whose label isn't declared anywhere
+    # in the document. This commonly happens when an article was produced
+    # via a Pandoc HTML round-trip that left orphan footnote references
+    # (the divs that would have declared the labels got mangled by the
+    # markdown→markdown reformatter). Without this guard Typst aborts the
+    # whole compile with "label `<foo>` does not exist". The fallback
+    # behavior is to render the link's display text as plain inline
+    # content — the user still sees the visible marker (e.g., "[2]")
+    # but the broken cross-reference is gone.
+    import re as _re
+    # Collect every label that is actually DECLARED (i.e., `<name>` not
+    # preceded by `#link(`). A Typst label declaration is `<name>` at
+    # the end of a line / element; references inside `#link(...)` are
+    # NOT declarations. We look for `<name>` whose preceding non-space
+    # character isn't `(` — that catches all declarations and skips
+    # `#link(<name>)` references.
+    declared_labels: set[str] = set()
+    for m in _re.finditer(r"(?<!\()<([a-zA-Z_][\w\-:.]*)>", typ_text):
+        declared_labels.add(m.group(1))
+
+    def _drop_orphan_link(m: "_re.Match") -> str:
+        label = m.group(1)
+        body = m.group(2)
+        if label in declared_labels:
+            return m.group(0)  # leave intact
+        return body  # render display text without the link
+
+    typ_text = _re.sub(
+        r"#link\(<([^>]+)>\)\[([^\]]*)\]",
+        _drop_orphan_link,
+        typ_text,
+    )
+
+    # Strip trailing ` |` artifacts at the end of Typst cell content.
+    # These come from Pandoc's grid-table parser when a colspan cell's
+    # closing `|` doesn't align perfectly with the column separator's
+    # last `+` — the stray pipe gets included as cell content and
+    # surfaces as visible text in the rendered PDF. The pattern is
+    # `<space>|]` (or `<space>|],`) at the end of a cell content block
+    # inside #table(...) or #table.cell(...)[...]. We also catch the
+    # corner case where a `]]` follows (#strong[...] |]).
+    typ_text = _re.sub(r"\s+\|(\]\s*[,)\n\]])", r"\1", typ_text)
+    typ_text = _re.sub(r"\s+\|\](?=\s*[,)])", "]", typ_text)
+
+    typst_input.write_text(typ_text, encoding="utf-8")
+
     import typst as typst_lib
     typst_lib.compile(str(typst_input), output=str(out), root=str(CONTENT_DIR))
+    return out
+
+
+def weasyprint_available() -> bool:
+    """Probe whether WeasyPrint can be imported. WeasyPrint requires a
+    handful of native libs (cairo, pango) that may not all be present;
+    import-time errors surface here as `False`."""
+    try:
+        import weasyprint  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def render_pdf_weasy(article_path: Path, journal_slug: str) -> Path:
+    """Render PDF via WeasyPrint from the rendered HTML galley.
+
+    This is an alternate to `render_pdf()` (which uses Pandoc+Typst).
+    The advantage: HTML and PDF share the same source HTML and CSS, so
+    they look visually identical. The disadvantage: WeasyPrint's
+    typography is weaker than Typst's (no native drop-caps, weaker
+    hyphenation, no tagged-PDF accessibility) so the print output is
+    less polished. Offered as an opt-in alternative.
+
+    Writes to article-weasy.pdf so it doesn't clobber the main
+    article.pdf (which is the Typst output).
+    """
+    if not weasyprint_available():
+        raise RuntimeError(
+            "WeasyPrint not installed (pip install weasyprint). The Pandoc"
+            " + Typst PDF pipeline remains available as the default."
+        )
+    import weasyprint
+
+    # Ensure HTML is fresh before rendering.
+    if not (article_path / "article.html").exists():
+        render_html(article_path, journal_slug)
+
+    html_path = article_path / "article.html"
+    tpl = template_dir(journal_slug)
+    css_paths = []
+    if (tpl / "article.css").exists():
+        css_paths.append(tpl / "article.css")
+    if (article_path / "article-override.css").exists():
+        css_paths.append(article_path / "article-override.css")
+
+    out = article_path / "article-weasy.pdf"
+    html = weasyprint.HTML(filename=str(html_path), base_url=str(article_path))
+    css = [weasyprint.CSS(filename=str(p)) for p in css_paths]
+    html.write_pdf(target=str(out), stylesheets=css)
     return out
 
 
@@ -474,6 +928,8 @@ def render_epub(article_path: Path, journal_slug: str) -> Path:
     docs) natively. We pass the journal's CSS as the epub stylesheet
     so the e-reader rendering broadly resembles the HTML galley.
     """
+    _repair_media_paths_in_file(article_path / "article.md")
+    _repair_markdown_quirks_in_file(article_path / "article.md")
     md = article_path / "article.md"
     out = article_path / "article.epub"
     tpl = template_dir(journal_slug)

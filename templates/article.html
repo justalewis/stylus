@@ -1,94 +1,575 @@
 {% extends "base.html" %}
 {% block title %}{{ article['title'] }} | Graphion{% endblock %}
 {% block content %}
-<section class="card">
-  <h1>{{ article['title'] }}</h1>
-  <p class="dim">
-    <code>{{ article['journal_slug'] }}/{{ article['slug'] }}</code>
-    &middot; status: <span class="badge status-{{ article['status'] }}">{{ article['status'] }}</span>
-  </p>
-  <nav class="action-row">
-    <a class="button" href="{{ url_for('article_metadata', article_id=article['id']) }}">Edit metadata</a>
-    <a class="button ghost" href="{{ url_for('article_edit_wysiwyg', article_id=article['id']) }}">Edit (WYSIWYG)</a>
-    <a class="button ghost" href="{{ url_for('article_edit', article_id=article['id']) }}">Edit Markdown</a>
-    <a class="button ghost" href="{{ url_for('article_lint', article_id=article['id']) }}">Run lint</a>
-    <button class="button" id="render-btn" data-href="{{ url_for('article_render', article_id=article['id']) }}">Render</button>
-    {% if rendered_html %}<a class="button ghost" href="{{ url_for('serve_html', article_id=article['id']) }}" target="_blank">View HTML</a>{% endif %}
-    {% if rendered_pdf %}<a class="button ghost" href="{{ url_for('serve_pdf', article_id=article['id']) }}" target="_blank">View PDF</a>{% endif %}
-    {% if rendered_html %}<a class="button ghost" href="{{ url_for('serve_html', article_id=article['id']) }}?dl=1">Download HTML</a>{% endif %}
-    {% if rendered_pdf %}<a class="button ghost" href="{{ url_for('serve_pdf', article_id=article['id']) }}?dl=1">Download PDF</a>{% endif %}
-    <a class="button ghost" href="{{ url_for('serve_epub', article_id=article['id']) }}">Download EPUB</a>
-    <a class="button ghost" href="{{ url_for('article_jats_xml', article_id=article['id']) }}">Download JATS XML</a>
-    <a class="button ghost" href="{{ url_for('article_crossref_xml', article_id=article['id']) }}">Download CrossRef XML</a>
-  </nav>
-  <div id="render-status" class="dim"></div>
+<div class="article-page">
 
-  <details style="margin-top: 1rem;">
-    <summary style="cursor: pointer; color: var(--muted); font-size: var(--text-sm);">Bibliography (BibTeX)</summary>
-    <p class="dim" style="margin-top: 0.75rem;">
-      Drop a <code>references.bib</code> here to enable structured citations.
-      Pandoc + the journal's CSL (currently MLA 9) will render Works Cited
-      automatically; CrossRef XML will emit structured <code>&lt;citation&gt;</code>
-      elements instead of unstructured prose.
-    </p>
-    <form method="post" enctype="multipart/form-data" action="{{ url_for('article_upload_bibliography', article_id=article['id']) }}" class="stack" style="margin-top: 0.75rem;">
-      <input type="file" name="bibliography" accept=".bib" required />
-      <button type="submit" class="button ghost small">Upload references.bib</button>
-    </form>
-  </details>
-
-  <details style="margin-top: 0.75rem;">
-    <summary style="cursor: pointer; color: var(--muted); font-size: var(--text-sm);">Per-article CSS override</summary>
-    <p class="dim" style="margin-top: 0.75rem;">
-      Upload a stylesheet that loads after the journal's <code>article.css</code> and
-      cascade-overrides any rules you specify. Affects the HTML galley and the EPUB;
-      the PDF (rendered via Typst) is unaffected. Useful for one-off typography
-      tweaks on a special-issue article without changing the journal template.
-    </p>
-    {% set override_exists = (article['project_path'] ~ '/article-override.css') is mapping %}
-    {% if has_override %}
-    <p class="dim" style="margin-top: 0.5rem;">
-      Current override is in place ({{ override_size }} bytes). Re-uploading replaces it.
-    </p>
-    <form method="post" action="{{ url_for('article_remove_override_css', article_id=article['id']) }}" style="display:inline; margin-top: 0.5rem;">
-      <input type="hidden" name="_method" value="DELETE" />
-      <button type="submit" class="button ghost small" onclick="return confirm('Remove the per-article CSS override?');">Remove override</button>
-    </form>
+  {# ---------- Breadcrumb ---------- #}
+  <nav class="crumbs" aria-label="Breadcrumb">
+    <a href="{{ url_for('dashboard') }}">Dashboard</a>
+    <span class="sep">›</span>
+    <a href="{{ url_for('journal_home', slug=article['journal_slug']) }}">{{ article['journal_slug'] }}</a>
+    {% if stats.issue_id and stats.issue_label %}
+    <span class="sep">›</span>
+    <a href="{{ url_for('issue_home', issue_id=stats.issue_id) }}">{{ stats.issue_label }}</a>
     {% endif %}
-    <form method="post" enctype="multipart/form-data" action="{{ url_for('article_upload_override_css', article_id=article['id']) }}" class="stack" style="margin-top: 0.75rem;">
-      <input type="file" name="override_css" accept=".css" required />
-      <button type="submit" class="button ghost small">Upload article-override.css</button>
-    </form>
-  </details>
-</section>
+    <span class="sep">›</span>
+    <span>{{ article['slug'] }}</span>
+  </nav>
 
-<section class="card">
-  <h2>Conversion log</h2>
-  <pre class="log">{{ log_text }}</pre>
-</section>
+  <section class="card">
+
+    {# ---------- Title + status pill ---------- #}
+    <div style="display:flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap;">
+      <h1 style="margin: 0;">{{ article['title'] }}</h1>
+      <span class="badge status-{{ article['status'] }}" style="margin-top: 0.4em;">{{ article['status'] }}</span>
+    </div>
+
+    {# ---------- Status strip ---------- #}
+    <div class="status-strip" role="status" aria-label="Article state">
+      <span class="stat {{ 'ok' if stats.last_rendered else 'dim' }}">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        {% if stats.last_rendered %}
+          <span class="num">{{ stats.last_rendered }}</span>
+        {% else %}
+          <span class="num">Never</span>
+        {% endif %}
+        <span class="lbl">rendered</span>
+      </span>
+      <span class="sep"></span>
+      <span class="stat"><span class="num">{{ stats.sections }}</span> <span class="lbl">sections</span></span>
+      <span class="stat"><span class="num">{{ stats.images }}</span> <span class="lbl">images</span></span>
+      <span class="stat"><span class="num">{{ stats.tables }}</span> <span class="lbl">tables</span></span>
+      {% if stats.missing > 0 %}
+      <span class="stat warn"><span class="num">{{ stats.missing }}</span> <span class="lbl">missing</span></span>
+      {% endif %}
+      <span class="stat"><span class="num">{{ stats.words }}</span> <span class="lbl">words</span></span>
+      <span class="sep"></span>
+      {% if stats.has_bib %}
+      <a class="chip chip-ok chip-action" href="#bibliography-section">references.bib uploaded</a>
+      {% else %}
+      <a class="chip chip-action" href="#bibliography-section">+ Add bibliography</a>
+      {% endif %}
+      {% if stats.has_override %}
+      <a class="chip chip-ok chip-action" href="#css-section">CSS override active</a>
+      {% else %}
+      <a class="chip chip-muted chip-action" href="#css-section">+ Add CSS override</a>
+      {% endif %}
+    </div>
+
+    {# ---------- Action groups (Tier 1: 4 grouped clusters) ---------- #}
+    <div class="actions">
+
+      {# Edit dropdown #}
+      <div class="action-group">
+        <div class="group-label">Edit</div>
+        <div class="menu-trigger" id="edit-menu">
+          <button class="button ghost" type="button" aria-haspopup="true" aria-expanded="false" id="edit-menu-btn">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            Edit content
+            <span class="menu-caret">▾</span>
+          </button>
+          <div class="menu-panel" role="menu">
+            <div class="menu-section">Metadata</div>
+            <a href="{{ url_for('article_metadata', article_id=article['id']) }}" role="menuitem">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              Title, authors, keywords, DOI…
+            </a>
+            <div class="menu-sep"></div>
+            <div class="menu-section">Body</div>
+            <a href="{{ url_for('article_edit_tinymce', article_id=article['id']) }}" role="menuitem">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg>
+              Rich editor (TinyMCE) <em style="color:var(--muted); font-size:var(--text-xs); margin-left:auto;">recommended</em>
+            </a>
+            {% if has_tables %}
+            <a href="{{ url_for('article_edit_wysiwyg', article_id=article['id']) }}" role="menuitem"
+               onclick="return confirm('This article contains tables. The lightweight WYSIWYG does not support grid tables and may damage them on save. Use Rich editor or Markdown for table-heavy articles. Continue anyway?');">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/></svg>
+              Lightweight WYSIWYG ⚠
+            </a>
+            {% else %}
+            <a href="{{ url_for('article_edit_wysiwyg', article_id=article['id']) }}" role="menuitem">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/></svg>
+              Lightweight WYSIWYG
+            </a>
+            {% endif %}
+            <a href="{{ url_for('article_edit', article_id=article['id']) }}" role="menuitem">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+              Markdown source <span class="kbd">M</span>
+            </a>
+          </div>
+        </div>
+      </div>
+
+      {# Render — primary big action #}
+      <div class="action-group primary">
+        <div class="group-label">Build</div>
+        <div class="primary-action">
+          <button class="button" id="render-btn" data-href="{{ url_for('article_render', article_id=article['id']) }}">
+            <svg class="icon icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Render <span class="kbd" style="margin-left:0.5em;">R</span>
+          </button>
+          <div class="subtitle">→ HTML · PDF · EPUB</div>
+        </div>
+      </div>
+
+      {# Outputs (only meaningful if rendered) #}
+      <div class="action-group">
+        <div class="group-label">Outputs</div>
+        {% if not rendered_html and not rendered_pdf %}
+        <p class="dim" style="font-size: var(--text-sm); margin: 0;">Click <strong>Render</strong> to generate.</p>
+        {% else %}
+        {% if rendered_html %}
+        <a class="button ghost small" href="{{ url_for('serve_html', article_id=article['id']) }}" target="_blank">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          View HTML
+        </a>
+        {% endif %}
+        {% if rendered_pdf %}
+        <a class="button ghost small" href="{{ url_for('serve_pdf', article_id=article['id']) }}" target="_blank">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          View PDF
+        </a>
+        {% endif %}
+        <div class="menu-trigger" id="download-menu">
+          <button class="button ghost small" type="button" aria-haspopup="true" id="download-menu-btn">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download
+            <span class="menu-caret">▾</span>
+          </button>
+          <div class="menu-panel">
+            <div class="menu-section">For readers</div>
+            {% if rendered_html %}<a href="{{ url_for('serve_html', article_id=article['id']) }}?dl=1">HTML</a>{% endif %}
+            {% if rendered_pdf %}<a href="{{ url_for('serve_pdf', article_id=article['id']) }}?dl=1">PDF</a>{% endif %}
+            <a href="{{ url_for('serve_epub', article_id=article['id']) }}">EPUB</a>
+            <div class="menu-sep"></div>
+            <div class="menu-section">For indexers</div>
+            <a href="{{ url_for('article_jats_xml', article_id=article['id']) }}">JATS XML</a>
+            <a href="{{ url_for('article_crossref_xml', article_id=article['id']) }}">CrossRef XML</a>
+            {% if rendered_html %}
+            <div class="menu-sep"></div>
+            <div class="menu-section">For OJS submission</div>
+            <a href="{{ url_for('article_ojs_package', article_id=article['id']) }}">OJS package (ZIP)</a>
+            {% endif %}
+            {% if stats.weasy_pdf_exists %}
+            <div class="menu-sep"></div>
+            <a href="{{ url_for('serve_html', article_id=article['id']) }}">article-weasy.pdf (alt)</a>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+      </div>
+
+      {# Tools dropdown #}
+      <div class="action-group">
+        <div class="group-label">Tools</div>
+        <a class="button ghost small" href="{{ url_for('article_lint', article_id=article['id']) }}">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          Run lint
+        </a>
+        <div class="menu-trigger" id="tools-menu">
+          <button class="button ghost small" type="button" aria-haspopup="true" id="tools-menu-btn">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Advanced
+            <span class="menu-caret">▾</span>
+          </button>
+          <div class="menu-panel">
+            <div class="menu-section">Alternate render</div>
+            <form method="post" action="{{ url_for('article_render_weasy', article_id=article['id']) }}">
+              <button type="submit" {% if not weasyprint_ok %}disabled title="Install WeasyPrint"{% endif %}>Render PDF (WeasyPrint)</button>
+            </form>
+            <div class="menu-section">Validation</div>
+            <form method="post" action="{{ url_for('article_validate_pdf', article_id=article['id']) }}">
+              <button type="submit" {% if not verapdf_ok %}disabled title="Install verapdf"{% endif %}>Validate PDF/UA</button>
+            </form>
+            <form method="post" action="{{ url_for('article_validate_html', article_id=article['id']) }}">
+              <button type="submit" {% if not pa11y_ok %}disabled title="Install pa11y"{% endif %}>Audit HTML accessibility</button>
+            </form>
+            <div class="menu-section">AI assist</div>
+            <form method="post" action="{{ url_for('article_stylize', article_id=article['id']) }}"
+                  onsubmit="return graphionConfirm('Stylize article (Claude)', 'Apply the journal style guide to the entire article body via Claude. Fixes run-on Works Cited, broken tables, Word HTML cruft, footnote artifacts, quote/dash normalization, and more — in one pass. Original snapshotted first; rollback via Snapshots if needed. Estimated cost: $0.02-$0.05 per article. Continue?', 'Stylize', false);">
+              <button type="submit" {% if not llm_ok %}disabled title="Set ANTHROPIC_API_KEY"{% endif %}><strong>Stylize article ★</strong></button>
+            </form>
+            <form method="post" action="{{ url_for('article_llm_alt_text', article_id=article['id']) }}"
+                  onsubmit="return graphionConfirm('Generate alt text', 'This sends each image without alt text to Claude. Cost: a few cents per article. Continue?', 'Generate', false);">
+              <button type="submit" {% if not llm_ok %}disabled title="Set ANTHROPIC_API_KEY"{% endif %}>Generate alt text</button>
+            </form>
+            <form method="post" action="{{ url_for('article_llm_repair_tables', article_id=article['id']) }}"
+                  onsubmit="return graphionConfirm('Repair tables only', 'This sends every grid table to Claude for reconstruction as pipe tables. Cost: a few cents per table. Original snapshotted first. (Note: the Stylize button above also handles tables among other fixes.) Continue?', 'Repair', false);">
+              <button type="submit" {% if not llm_ok %}disabled title="Set ANTHROPIC_API_KEY"{% endif %}>Repair tables only</button>
+            </form>
+            <div class="menu-section">OCR</div>
+            <form method="post" action="{{ url_for('article_ocr_images', article_id=article['id']) }}">
+              <button type="submit" {% if not ocr_ok %}disabled title="Install Tesseract"{% endif %}>OCR images</button>
+            </form>
+            <div class="menu-sep"></div>
+            <a href="{{ url_for('article_snapshots', article_id=article['id']) }}">View snapshots ({{ snapshot_count }})</a>
+            {% if not weasyprint_ok and not verapdf_ok and not pa11y_ok and not llm_ok and not ocr_ok %}
+            <div class="menu-sep"></div>
+            <a href="{{ url_for('help_page', slug='14-advanced-tools') }}" style="font-size:var(--text-xs);">No tools detected — install instructions →</a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    {# ---------- Render progress placeholder ---------- #}
+    <div id="render-progress" class="render-progress" style="display:none;">
+      <div class="spinner"></div>
+      <div>
+        <div class="step-name" id="render-step-name">Starting…</div>
+        <div class="step-list">
+          <span class="step" data-step="0">Validate</span>
+          <span>·</span>
+          <span class="step" data-step="1">HTML</span>
+          <span>·</span>
+          <span class="step" data-step="2">PDF</span>
+          <span>·</span>
+          <span class="step" data-step="3">EPUB</span>
+        </div>
+      </div>
+    </div>
+    <div id="render-status" class="dim" style="margin-top: var(--space-2);"></div>
+
+    {# ---------- Missing images warning ---------- #}
+    {% if missing_images %}
+    <section class="card" style="border:1px solid #c66; background:#fff8f4; margin-top:var(--space-4);">
+      <h2 style="color:#a33; margin-top:0; font-size:var(--text-lg);">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        Missing image files ({{ missing_images|length }})
+      </h2>
+      <p class="dim">
+        The article references images that aren't on disk. Rendering will fail until you provide them.
+        Upload below, or drop the files into the article's <code>assets/</code> subdirectory.
+        Format-mismatch (e.g. JPEG renamed to <code>.png</code>) is auto-detected and the markdown is rewritten.
+      </p>
+      <form method="post" action="{{ url_for('article_upload_missing_assets', article_id=article['id']) }}"
+            enctype="multipart/form-data" class="stack">
+        {% for img in missing_images %}
+        <label style="display:block; padding:var(--space-2) 0; border-bottom:1px dashed #d4b4a8;">
+          <div style="font-family:var(--font-mono); font-size:var(--text-sm); color:var(--ink);">{{ img }}</div>
+          <input type="file" name="{{ img }}" accept="image/*,.pdf,.svg" style="margin-top:var(--space-1);" />
+        </label>
+        {% endfor %}
+        <button type="submit" class="button">Upload missing files</button>
+      </form>
+    </section>
+    {% endif %}
+  </section>
+
+  {# ---------- Tab nav for the rest of the page ---------- #}
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="overview" role="tab" type="button">Overview</button>
+    <button class="tab" data-tab="preview" role="tab" type="button">Preview</button>
+    <button class="tab" data-tab="logs" role="tab" type="button">Logs</button>
+    <button class="tab" data-tab="settings" role="tab" type="button">Settings</button>
+  </nav>
+
+  {# ---------- Overview tab ---------- #}
+  <section class="tab-panel active" data-tab="overview">
+    <div class="card">
+      <h2 style="margin-top:0;">Recent activity</h2>
+      {% if recent_activity %}
+      <ul class="timeline">
+        {% for ev in recent_activity %}
+        <li>
+          <time>{{ ev.when }}</time>
+          <span class="what">{{ ev.what }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="dim">No activity yet.</p>
+      {% endif %}
+      <p class="dim" style="margin-top: var(--space-3); font-size: var(--text-sm);">
+        Full log is on the <a href="#" data-tab-link="logs">Logs</a> tab.
+        Snapshot history: <a href="{{ url_for('article_snapshots', article_id=article['id']) }}">{{ snapshot_count }} version{{ '' if snapshot_count == 1 else 's' }}</a>.
+      </p>
+    </div>
+  </section>
+
+  {# ---------- Preview tab ---------- #}
+  <section class="tab-panel" data-tab="preview">
+    {% if rendered_html %}
+    <div class="card">
+      <h2 style="margin-top:0;">HTML preview</h2>
+      <iframe class="preview-frame" src="{{ url_for('serve_html', article_id=article['id']) }}" title="Article HTML preview"></iframe>
+    </div>
+    {% else %}
+    <div class="card">
+      <p class="dim">Render the article to enable preview.</p>
+    </div>
+    {% endif %}
+  </section>
+
+  {# ---------- Logs tab ---------- #}
+  <section class="tab-panel" data-tab="logs">
+    <div class="card">
+      <h2 style="margin-top:0;">Conversion log</h2>
+      <pre class="log" style="max-height: 60vh; overflow:auto;">{{ log_text or 'No log yet.' }}</pre>
+    </div>
+  </section>
+
+  {# ---------- Settings tab ---------- #}
+  <section class="tab-panel" data-tab="settings">
+
+    <section class="card" id="bibliography-section">
+      <h2 style="margin-top:0;">Bibliography (BibTeX)</h2>
+      <p class="dim">
+        Drop a <code>references.bib</code> here to enable structured citations.
+        Pandoc + the journal's CSL will render Works Cited automatically.
+      </p>
+      <p class="dim" style="margin-top:var(--space-2);">
+        Don't have a <code>.bib</code> file?
+        <a href="{{ url_for('bib_builder_page') }}">Build one from your prose Works Cited →</a>
+      </p>
+      <form method="post" enctype="multipart/form-data"
+            action="{{ url_for('article_upload_bibliography', article_id=article['id']) }}"
+            class="stack" style="margin-top:var(--space-3);">
+        <input type="file" name="bibliography" accept=".bib" required />
+        <button type="submit" class="button ghost small">Upload references.bib</button>
+      </form>
+    </section>
+
+    <section class="card" id="css-section">
+      <h2 style="margin-top:0;">Per-article CSS override</h2>
+      <p class="dim">
+        Loads after the journal's <code>article.css</code> for one-off typography tweaks.
+        Affects HTML + EPUB; PDF (Typst) is unaffected.
+      </p>
+      {% if has_override %}
+      <p class="dim" style="margin-top: var(--space-2);">
+        Active ({{ override_size }} bytes). Re-uploading replaces it.
+      </p>
+      <form method="post" action="{{ url_for('article_remove_override_css', article_id=article['id']) }}"
+            style="display:inline;">
+        <input type="hidden" name="_method" value="DELETE" />
+        <button type="submit" class="button ghost small"
+                onclick="return graphionConfirm('Remove override', 'Remove the per-article CSS override?', 'Remove', false);">
+          Remove override
+        </button>
+      </form>
+      {% endif %}
+      <form method="post" enctype="multipart/form-data"
+            action="{{ url_for('article_upload_override_css', article_id=article['id']) }}"
+            class="stack" style="margin-top:var(--space-3);">
+        <input type="file" name="override_css" accept=".css" required />
+        <button type="submit" class="button ghost small">Upload article-override.css</button>
+      </form>
+    </section>
+
+    <section class="card danger-zone">
+      <div class="group-label">Danger zone</div>
+      <h2 style="margin-top:var(--space-1); font-size:var(--text-lg);">Recovery and deletion</h2>
+
+      <p class="dim" style="margin-top:0;">
+        <strong>Re-clean from source</strong> rebuilds <code>article.md</code> from the pristine Pandoc
+        output. Use this to recover from WYSIWYG damage. Snapshots current state to <code>.versions/</code>.
+      </p>
+      <form method="post" action="{{ url_for('article_reclean', article_id=article['id']) }}"
+            style="display:inline;"
+            onsubmit="return graphionConfirm('Re-clean from source', 'Rebuild article.md from article-raw.md? Your current article.md is snapshotted to .versions/ first.', 'Re-clean', false);">
+        <button type="submit" class="button ghost small">Re-clean from source</button>
+      </form>
+
+      <hr style="border:0; border-top:1px dashed #d4b4a8; margin: var(--space-4) 0;" />
+
+      <p class="dim" style="margin-top:0;">
+        <strong>Delete</strong> removes the database row AND the entire article directory on disk. No undo.
+      </p>
+      <form method="post" action="{{ url_for('article_delete', article_id=article['id']) }}"
+            style="display:inline;"
+            onsubmit="return graphionConfirm('Delete article', 'This permanently removes the database row AND the article directory on disk. There is no undo.', 'Delete article', true);">
+        <button type="submit" class="button" style="background:#c44; border-color:#c44; color:var(--paper);">Delete article</button>
+      </form>
+    </section>
+
+  </section>
+
+</div>
+
+{# ---------- Toast host + Confirm modal ---------- #}
+<div class="toast-host" id="toast-host" aria-live="polite"></div>
 
 <script>
-  const btn = document.getElementById('render-btn');
-  const status = document.getElementById('render-status');
-  if (btn) {
-    btn.addEventListener('click', async () => {
-      status.textContent = 'Rendering...';
-      btn.disabled = true;
-      try {
-        const r = await fetch(btn.dataset.href, { method: 'POST' });
-        const data = await r.json();
-        if (data.errors && data.errors.length) {
-          status.innerHTML = '<strong>Errors:</strong> ' + data.errors.map(e => `<div>${e}</div>`).join('');
-        } else {
-          status.textContent = 'Done. Reloading...';
-          location.reload();
-        }
-      } catch (e) {
-        status.textContent = 'Render request failed: ' + e;
-      } finally {
-        btn.disabled = false;
+  // ---------- Tab nav ----------
+  const tabs = document.querySelectorAll('.tab');
+  const panels = document.querySelectorAll('.tab-panel');
+  function showTab(name) {
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+    panels.forEach(p => p.classList.toggle('active', p.dataset.tab === name));
+    if (history.replaceState) {
+      history.replaceState(null, '', '#tab=' + name);
+    }
+  }
+  tabs.forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
+  document.querySelectorAll('[data-tab-link]').forEach(a => {
+    a.addEventListener('click', (e) => { e.preventDefault(); showTab(a.dataset.tabLink); });
+  });
+  // Honor hash on load: #tab=logs
+  const hashMatch = location.hash.match(/^#tab=(\w+)/);
+  if (hashMatch) showTab(hashMatch[1]);
+
+  // ---------- Dropdown menus ----------
+  document.querySelectorAll('.menu-trigger').forEach(trigger => {
+    const btn = trigger.querySelector('button[aria-haspopup]');
+    if (!btn) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Close other open menus.
+      document.querySelectorAll('.menu-trigger.open').forEach(m => {
+        if (m !== trigger) m.classList.remove('open');
+      });
+      trigger.classList.toggle('open');
+      btn.setAttribute('aria-expanded', trigger.classList.contains('open'));
+    });
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.menu-trigger')) {
+      document.querySelectorAll('.menu-trigger.open').forEach(m => m.classList.remove('open'));
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.menu-trigger.open').forEach(m => m.classList.remove('open'));
+    }
+  });
+
+  // ---------- Toast ----------
+  function showToast(message, type) {
+    type = type || 'info';
+    const host = document.getElementById('toast-host');
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-' + type;
+    const close = document.createElement('button');
+    close.className = 'toast-close';
+    close.innerHTML = '&times;';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.addEventListener('click', () => toast.remove());
+    toast.appendChild(close);
+    const span = document.createElement('span');
+    span.textContent = message;
+    toast.appendChild(span);
+    host.appendChild(toast);
+    setTimeout(() => { toast.remove(); }, 6000);
+  }
+  // Surface Flask flashes as toasts.
+  document.querySelectorAll('.flashes li').forEach(li => {
+    let type = 'info';
+    if (li.classList.contains('flash-error')) type = 'error';
+    else if (li.classList.contains('flash-warning')) type = 'warn';
+    else if (li.classList.contains('flash-success')) type = 'success';
+    showToast(li.textContent.trim(), type);
+    li.style.display = 'none';
+  });
+
+  // ---------- Styled confirm modal ----------
+  // Returns false synchronously to cancel the form submit, then if the
+  // user confirms in the modal, re-submits the form programmatically.
+  let modalPending = null;
+  window.graphionConfirm = function(title, message, confirmLabel, isDanger) {
+    // If we're being called as a second invocation (after the user
+    // clicked Confirm), let the submission go through.
+    if (modalPending && modalPending.released) {
+      modalPending = null;
+      return true;
+    }
+    // First invocation: pop modal, prevent the form submit.
+    const form = event ? event.target.closest('form') : null;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    const modal = document.createElement('div');
+    modal.className = 'modal' + (isDanger ? ' danger' : '');
+    modal.innerHTML = `
+      <h2>${title}</h2>
+      <p>${message}</p>
+      <div class="modal-actions">
+        <button type="button" class="button ghost" data-act="cancel">Cancel</button>
+        <button type="button" class="button ${isDanger ? 'danger' : ''}" data-act="confirm">${confirmLabel}</button>
+      </div>`;
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    modal.querySelector('[data-act=cancel]').addEventListener('click', () => backdrop.remove());
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
+    modal.querySelector('[data-act=confirm]').addEventListener('click', () => {
+      backdrop.remove();
+      if (form) {
+        modalPending = { released: true };
+        form.submit();
       }
     });
+    return false;
+  };
+
+  // ---------- Render with progress ----------
+  const renderBtn = document.getElementById('render-btn');
+  const renderStatus = document.getElementById('render-status');
+  const renderProgress = document.getElementById('render-progress');
+  const renderStepName = document.getElementById('render-step-name');
+  const steps = ['Validate', 'Render HTML', 'Render PDF (Typst)', 'Render EPUB'];
+
+  async function doRender() {
+    renderStatus.textContent = '';
+    renderProgress.style.display = 'flex';
+    renderBtn.disabled = true;
+
+    // Fake step progress while the server works — the actual Pandoc/
+    // Typst pipeline doesn't emit progress, so we cycle through the
+    // step names on a timer to give the user something to look at.
+    let stepIdx = 0;
+    renderStepName.textContent = steps[0];
+    document.querySelectorAll('.step').forEach((el, i) => el.classList.toggle('active', i === 0));
+    const interval = setInterval(() => {
+      if (stepIdx < steps.length - 1) {
+        document.querySelector(`.step[data-step="${stepIdx}"]`).classList.replace('active', 'done');
+        stepIdx++;
+        renderStepName.textContent = steps[stepIdx];
+        document.querySelector(`.step[data-step="${stepIdx}"]`).classList.add('active');
+      }
+    }, 2200);
+
+    try {
+      const r = await fetch(renderBtn.dataset.href, { method: 'POST' });
+      const data = await r.json();
+      clearInterval(interval);
+      renderProgress.style.display = 'none';
+      if (data.errors && data.errors.length) {
+        renderStatus.innerHTML = '<strong>Errors:</strong> ' + data.errors.map(e => `<div>${e}</div>`).join('');
+        showToast('Render had errors — see article page', 'error');
+      } else {
+        showToast('Render complete — reloading…', 'success');
+        setTimeout(() => location.reload(), 600);
+      }
+    } catch (e) {
+      clearInterval(interval);
+      renderProgress.style.display = 'none';
+      renderStatus.textContent = 'Render request failed: ' + e;
+      showToast('Render request failed: ' + e, 'error');
+    } finally {
+      renderBtn.disabled = false;
+    }
   }
+  if (renderBtn) renderBtn.addEventListener('click', doRender);
+
+  // ---------- Keyboard shortcuts ----------
+  // Avoid intercepting when user is typing in an input/textarea.
+  function isTyping() {
+    const tag = document.activeElement.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement.isContentEditable;
+  }
+  document.addEventListener('keydown', (e) => {
+    if (isTyping() || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'r' || e.key === 'R') {
+      e.preventDefault();
+      if (renderBtn && !renderBtn.disabled) doRender();
+    } else if (e.key === 'm' || e.key === 'M') {
+      window.location.href = '{{ url_for("article_edit", article_id=article["id"]) }}';
+    } else if (e.key === 'e' || e.key === 'E') {
+      window.location.href = '{{ url_for("article_edit_tinymce", article_id=article["id"]) }}';
+    } else if (e.key === '1') { showTab('overview'); }
+    else if (e.key === '2') { showTab('preview'); }
+    else if (e.key === '3') { showTab('logs'); }
+    else if (e.key === '4') { showTab('settings'); }
+  });
 </script>
 {% endblock %}

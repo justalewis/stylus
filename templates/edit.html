@@ -18,9 +18,12 @@
   <h1>Editing: {{ article['title'] }}</h1>
   <div class="editor-toolbar">
     <button class="button" id="save-btn">Save</button>
+    <button type="button" class="button ghost" id="insert-image-btn" title="Upload an image to this article's assets/ folder and insert Markdown at the cursor.">Insert image</button>
     <a class="button ghost" href="{{ url_for('article_home', article_id=article['id']) }}">Back</a>
     <span class="save-status" id="save-status"></span>
+    <input type="file" id="image-upload-input" accept="image/*" hidden />
   </div>
+  <script id="asset-upload-config" type="application/json">{{ {'upload_url': url_for('article_upload_asset', article_id=article['id'])} | tojson }}</script>
   <div class="editor-grid">
     <div class="editor-pane">
       <textarea id="md-editor">{{ md_text }}</textarea>
@@ -58,6 +61,92 @@
   cm.on('change', () => { renderPreview(); });
   renderPreview();
 
+  // ---------- Bidirectional scroll-sync ----------
+  // Strategy: track relative scroll position (0.0 at top, 1.0 at bottom)
+  // in whichever pane the user is interacting with, then mirror that
+  // position in the other pane. A "syncing" flag prevents the
+  // re-broadcast loop (otherwise pane A scrolls -> programmatic scroll
+  // of pane B -> B fires its scroll event -> tries to sync back to A).
+  //
+  // The mapping is proportional, not element-aware: a 50%-scrolled
+  // Markdown view shows 50%-scrolled preview. Works well in practice
+  // because the two panes grow roughly in parallel; long code blocks
+  // or wide tables can drift, but the click-to-jump handler resets
+  // the alignment on demand.
+
+  const previewPane = document.getElementById('preview');
+  const cmScrollEl = cm.getScrollerElement();
+  let syncing = false;
+  let syncEnabled = true;
+
+  function relativeScroll(el) {
+    const range = el.scrollHeight - el.clientHeight;
+    return range > 0 ? el.scrollTop / range : 0;
+  }
+  function applyRelativeScroll(el, frac) {
+    const range = el.scrollHeight - el.clientHeight;
+    if (range > 0) el.scrollTop = frac * range;
+  }
+
+  // CodeMirror exposes its own scroll API; we use the scroller element
+  // for raw scroll-position math.
+  cmScrollEl.addEventListener('scroll', () => {
+    if (syncing || !syncEnabled) return;
+    syncing = true;
+    applyRelativeScroll(previewPane, relativeScroll(cmScrollEl));
+    requestAnimationFrame(() => { syncing = false; });
+  });
+  previewPane.addEventListener('scroll', () => {
+    if (syncing || !syncEnabled) return;
+    syncing = true;
+    applyRelativeScroll(cmScrollEl, relativeScroll(previewPane));
+    requestAnimationFrame(() => { syncing = false; });
+  });
+
+  // Click-to-jump: when the user clicks in either pane, snap the other
+  // pane to the same relative position. This re-aligns the two views
+  // after they've drifted (e.g., the user typed in a long code block
+  // and the proportional sync is off).
+  function jumpFromCursor() {
+    if (!syncEnabled) return;
+    // CodeMirror's cursor line / total lines is the relative position.
+    const cursor = cm.getCursor();
+    const lastLine = cm.lastLine();
+    const frac = lastLine > 0 ? cursor.line / lastLine : 0;
+    syncing = true;
+    applyRelativeScroll(previewPane, frac);
+    requestAnimationFrame(() => { syncing = false; });
+  }
+  cm.on('cursorActivity', jumpFromCursor);
+
+  previewPane.addEventListener('click', (e) => {
+    if (!syncEnabled) return;
+    // Click position relative to the top of the scrollable content.
+    const clickY = e.clientY - previewPane.getBoundingClientRect().top + previewPane.scrollTop;
+    const frac = clickY / previewPane.scrollHeight;
+    // Move CodeMirror cursor to the line at that relative position.
+    const lastLine = cm.lastLine();
+    const targetLine = Math.max(0, Math.min(lastLine, Math.round(frac * lastLine)));
+    syncing = true;
+    cm.setCursor({ line: targetLine, ch: 0 });
+    // Don't snatch focus away from the click if the user wanted to
+    // select preview text — only re-align scroll.
+    applyRelativeScroll(cmScrollEl, frac);
+    requestAnimationFrame(() => { syncing = false; });
+  });
+
+  // Toggle to let power users disable sync if it gets in the way.
+  // Press Ctrl+Shift+L (Link/Lock).
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'L' || e.key === 'l')) {
+      e.preventDefault();
+      syncEnabled = !syncEnabled;
+      saveStatus.textContent = syncEnabled
+        ? 'Scroll sync: ON'
+        : 'Scroll sync: OFF (Ctrl+Shift+L to re-enable)';
+    }
+  });
+
   const saveBtn = document.getElementById('save-btn');
   const saveStatus = document.getElementById('save-status');
   saveBtn.addEventListener('click', async () => {
@@ -82,6 +171,38 @@
     if ((e.metaKey || e.ctrlKey) && e.key === 's') {
       e.preventDefault();
       saveBtn.click();
+    }
+  });
+
+  // ---------- Insert image ----------
+  // Uploads to /articles/<id>/upload-asset and inserts a Markdown image
+  // reference at the cursor position. Mirrors the WYSIWYG editor's
+  // behavior so users don't have to know where to drop files manually.
+  const uploadUrl = JSON.parse(document.getElementById('asset-upload-config').textContent).upload_url;
+  const insertImgBtn = document.getElementById('insert-image-btn');
+  const imgInput = document.getElementById('image-upload-input');
+  insertImgBtn.addEventListener('click', () => {
+    imgInput.value = "";
+    imgInput.click();
+  });
+  imgInput.addEventListener('change', async () => {
+    const file = imgInput.files && imgInput.files[0];
+    if (!file) return;
+    saveStatus.textContent = `Uploading ${file.name}...`;
+    try {
+      const fd = new FormData();
+      fd.append('asset', file);
+      const r = await fetch(uploadUrl, { method: 'POST', body: fd });
+      const data = await r.json();
+      if (!data.ok) {
+        saveStatus.textContent = `Upload failed: ${data.error || 'unknown error'}`;
+        return;
+      }
+      cm.replaceSelection(data.markdown);
+      cm.focus();
+      saveStatus.textContent = `Inserted ${data.filename} (${data.bytes.toLocaleString()} bytes).`;
+    } catch (e) {
+      saveStatus.textContent = `Upload failed: ${e}`;
     }
   });
 </script>

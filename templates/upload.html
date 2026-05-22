@@ -5,9 +5,14 @@
   <h1>Upload article</h1>
   <p class="dim">Journal: {{ journal['name'] }}</p>
   <form method="post" enctype="multipart/form-data" class="stack">
-    <label>DOCX file
-      <input type="file" name="docx" accept=".docx" required />
+    <label>Source file (.docx, .md, or .markdown)
+      <input type="file" name="source" accept=".docx,.md,.markdown" required />
     </label>
+    <p class="dim" style="margin-top: -0.25rem; font-size: var(--text-sm);">
+      Upload a Word document (.docx) for the standard ingest pipeline, or
+      upload a Markdown file you authored elsewhere (Writage, Pandoc CLI,
+      hand-written). Cleanups run on both.
+    </p>
     <label>Slug (optional; derived from filename if blank)
       <input type="text" name="slug" placeholder="fernandes-sano-franchini-mcintyre-2026" />
     </label>
@@ -28,6 +33,35 @@
       <label><input type="radio" name="track_changes" value="accept" checked /> Accept all</label>
       <label><input type="radio" name="track_changes" value="reject" /> Reject all</label>
     </fieldset>
+
+    <fieldset>
+      <legend>DOCX ingest engine</legend>
+      <label>
+        <input type="radio" name="ingest_engine" value="pandoc" checked />
+        Pandoc (default — handles academic prose well, struggles with text boxes)
+      </label>
+      <label>
+        <input type="radio" name="ingest_engine" value="mammoth"
+               {% if not mammoth_available %}disabled{% endif %} />
+        Mammoth (often better for text-box-heavy DOCX)
+        {% if not mammoth_available %}<span class="dim">— install with <code>pip install mammoth</code></span>{% endif %}
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Optional preprocessing</legend>
+      <label>
+        <input type="checkbox" name="preprocess_lo"
+               {% if not libreoffice_available %}disabled{% endif %} />
+        Round-trip the DOCX through LibreOffice before ingest
+        {% if libreoffice_available %}
+        <span class="dim">— flattens text boxes, cleans Word autoformat junk</span>
+        {% else %}
+        <span class="dim">— LibreOffice not detected on PATH; install <a href="https://www.libreoffice.org/" target="_blank">LibreOffice</a> to enable</span>
+        {% endif %}
+      </label>
+    </fieldset>
+
     <button type="submit">Ingest and clean</button>
   </form>
 </section>

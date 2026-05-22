@@ -45,7 +45,7 @@
   <h2>Recent articles</h2>
   {% if recent %}
   <table class="data">
-    <thead><tr><th>Title</th><th>Journal</th><th>Status</th><th>Updated</th></tr></thead>
+    <thead><tr><th>Title</th><th>Journal</th><th>Status</th><th>Updated</th><th></th></tr></thead>
     <tbody>
       {% for a in recent %}
       <tr>
@@ -53,6 +53,12 @@
         <td>{{ a['journal_name'] }}</td>
         <td><span class="badge status-{{ a['status'] }}">{{ a['status'] }}</span></td>
         <td class="dim">{{ a['updated_at'] }}</td>
+        <td>
+          <form method="post" action="{{ url_for('article_delete', article_id=a['id']) }}" style="display:inline;"
+                onsubmit="return confirm('Delete this article? This removes the database row AND the article directory on disk. There is no undo.');">
+            <button type="submit" class="button ghost small">Delete</button>
+          </form>
+        </td>
       </tr>
       {% endfor %}
     </tbody>

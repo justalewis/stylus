@@ -50,37 +50,51 @@ Two problems it tries to solve:
 
 ### Prerequisites
 
-- **Python 3.11+**
+- **Python 3.11+** (3.12 recommended)
 - **Pandoc 3+** ([install instructions](https://pandoc.org/installing.html))
 - A modern web browser
 
-Typst, pypdfium2, bibtexparser, and friends install via pip.
+Typst (the PDF engine), pypdf, bibtexparser, and friends install via pip.
 
-### Install
+### Install (10 minutes, basic)
 
 ```bash
 git clone https://github.com/justalewis/graphion.git
-cd stylus
+cd graphion
 pip install -r requirements.txt
+python seed.py            # prompts for an admin username + password
+python app.py             # opens at http://127.0.0.1:5050
 ```
 
-### Initial setup
+That gives you a fully working editor with HTML, PDF, EPUB, JATS, and CrossRef output. Optional integrations (Claude AI assistance, alternate PDF engines, accessibility validators, OCR) are described in the [Advanced Tools guide](docs/help/14-advanced-tools.md) and the [Installation guide](docs/help/12-installation.md).
+
+### Quick install of optional integrations (Windows only, one-shot)
+
+```cmd
+:: Run as Administrator:
+powershell -ExecutionPolicy Bypass -File .\install-graphion-deps.ps1
+```
+
+That installs Chocolatey if needed, then LibreOffice, Tesseract OCR, Node.js, Java 21, GTK3 runtime, verapdf, and pa11y. See the [Installation guide](docs/help/12-installation.md) for per-platform manual instructions.
+
+### Enabling Claude AI assistance
+
+Get an API key from <https://console.anthropic.com/>. In the shell where you run `python app.py`:
 
 ```bash
-python seed.py
+# macOS / Linux:
+export ANTHROPIC_API_KEY=sk-ant-your-key-here
+
+# Windows cmd:
+set ANTHROPIC_API_KEY=sk-ant-your-key-here
+
+# Windows PowerShell:
+$env:ANTHROPIC_API_KEY = "sk-ant-your-key-here"
 ```
 
-You'll be prompted for an admin username and password. Defaults
-create the LiCS example journal so you can see a complete configuration.
+To make it permanent on Windows: `setx ANTHROPIC_API_KEY "sk-ant-..."` then **close and reopen the terminal**. On macOS/Linux, add the `export` line to your shell rc file.
 
-### Run
-
-```bash
-python app.py
-```
-
-Open <http://127.0.0.1:5050>. Sign in with the admin credentials you
-just created.
+Once set, the **Stylize article ★** button (Article page → Tools → Advanced) applies the journal's style guide to the article body in one Claude call: splits Works Cited entries, fixes tables, strips Word HTML cruft, normalizes typography. The per-journal style guide lives at `content/journals/<slug>/template/style-guide.md` — edit once, use forever.
 
 ### First article
 

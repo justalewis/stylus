@@ -141,6 +141,298 @@ def strip_orphan_page_numbers(text: str, log: CleanupLog) -> str:
     return new_text.rstrip() + "\n"
 
 
+def convert_pandoc_div_footnotes_to_native(text: str, log: CleanupLog) -> str:
+    """Convert Pandoc Div-style footnote markup to canonical Pandoc
+    footnote syntax (`[^id]` references, `[^id]: ` definitions).
+
+    Pandoc HTML→Markdown round-trips emit footnotes as Div blocks with
+    anchor identifiers, looking like this in the source:
+
+        Body text[\\[1\\]](#footnote-2) ...
+
+        1.  ::: {#footnote-2}
+            For a more comprehensive look at how the question...
+            [?](#footnote-ref-2)
+            ::: 2.  ::: {#footnote-3}
+            ...
+            :::
+
+    The body has `[N](#footnote-X)` links pointing INTO the divs;
+    each div has a `[?](#footnote-ref-N)` back-arrow pointing back to
+    the body location. This format doesn't survive `unfragment_works_cited`
+    (the divs get merged into the trailing Works Cited entry and
+    Pandoc's Typst writer can no longer emit proper labels), and even
+    when parsed correctly, page-bottom footnotes don't work because
+    these divs are floating content rather than `Note` AST nodes.
+
+    Convert to canonical Pandoc footnote syntax:
+
+        Body text[^footnote-2] ...
+
+        [^footnote-2]: For a more comprehensive look...
+
+    Pandoc's native footnote handling then takes over: clickable
+    superscript markers in HTML, page-bottom footnotes in PDF, and
+    Pandoc auto-generates the back-arrows. The footnote IDs are
+    preserved verbatim (e.g., `footnote-2`) so we don't have to
+    re-number — Pandoc renders the visual numbers based on body
+    appearance order regardless of label content.
+    """
+    # 1. Find every div-style footnote definition, including any
+    # leading numbered-list marker the round-trip may have introduced.
+    # DOTALL so content can span newlines; non-greedy on content so
+    # the first `:::` after the opening is treated as the closing.
+    pattern = re.compile(
+        r"(?:^|(?<=\s))"           # at start or after whitespace
+        r"(?:\d+\.\s+)?"            # optional list marker like "1.  "
+        r":::\s*\{#footnote-([^\s}]+)\}"  # opening: ::: {#footnote-N}
+        r"\s*(.*?)"                 # content (non-greedy)
+        r"\s*:::",                  # closing :::
+        re.DOTALL,
+    )
+
+    definitions: dict[str, str] = {}
+    order: list[str] = []
+
+    def collect(m: "re.Match") -> str:
+        fid = m.group(1)
+        content = m.group(2)
+        # Strip the back-arrow link found inside footnote content.
+        content = re.sub(
+            r"\s*\[[^\]]*\]\(#footnote-ref-[^)]+\)\s*",
+            " ",
+            content,
+        )
+        # Collapse runs of whitespace (the content was indented inside
+        # the div, which produces hard newlines we don't want in the
+        # final [^N]: definition).
+        content = re.sub(r"\s+", " ", content).strip()
+        if fid not in definitions:
+            definitions[fid] = content
+            order.append(fid)
+        # Replace the div with nothing — definitions go to the bottom.
+        return ""
+
+    new_text, n_def = pattern.subn(collect, text)
+
+    # 2. Rewrite body references to canonical Pandoc footnotes.
+    # Two formats are commonly produced by Pandoc HTML round-trips:
+    #
+    #   (a) `[\[1\]](#footnote-2)`         — escaped-brackets text
+    #   (b) `^^[[1]](#footnote-2){#footnote-ref-2}^^`  — superscript +
+    #        link + attribute-ID (the attribute makes the body location
+    #        targetable from the footnote's back-arrow link).
+    #
+    # We use a permissive regex that matches both — link text can
+    # contain anything that isn't a newline, and the trailing
+    # `{#footnote-ref-N}` attribute (if present) is consumed and
+    # discarded. Outer `^^...^^` superscript markers are stripped if
+    # they bracket the now-converted footnote ref (since `[^N]` is
+    # rendered as a superscript automatically).
+    body_ref = re.compile(
+        r"(?P<sup_open>\^\^)?"
+        r"\[[^\n]*?\]\(#footnote-(?P<id>[^\s)]+)\)"
+        r"(?P<attr>\{#footnote-ref-[^}]+\})?"
+        r"(?P<sup_close>\^\^)?"
+    )
+    def _replace_body_ref(m: "re.Match") -> str:
+        return f"[^{m.group('id')}]"
+    new_text, n_ref = body_ref.subn(_replace_body_ref, new_text)
+
+    # 3. Strip any orphan back-arrow links that survived outside divs.
+    new_text = re.sub(
+        r"\[[^\n]*?\]\(#footnote-ref-[^)]+\)", "", new_text,
+    )
+    # Also strip orphan `{#footnote-ref-N}` attribute blocks.
+    new_text = re.sub(r"\{#footnote-ref-[^}]+\}", "", new_text)
+
+    # 4. Clean up the trailing artifacts left when divs got embedded in
+    # a numbered list squashed onto one line: numerals + spaces that
+    # used to mark list items now have nothing to mark.
+    # e.g., "1825-1846.   2.   3.   4." after stripping. The trailing
+    # naked "N.  " markers are safe to drop.
+    new_text = re.sub(r"(?<=\s)\d+\.\s+(?=\d+\.\s|$)", "", new_text)
+    new_text = re.sub(r"(?<=\s)\d+\.\s*$", "", new_text, flags=re.MULTILINE)
+
+    # 5. Append the collected definitions at the end of the document,
+    # separated by blank lines so Pandoc parses each as a standalone
+    # footnote definition.
+    if definitions:
+        new_text = new_text.rstrip()
+        new_text += "\n\n" + "\n\n".join(
+            f"[^{fid}]: {definitions[fid]}" for fid in order
+        ) + "\n"
+        log.record(
+            "convert_pandoc_div_footnotes_to_native",
+            len(definitions),
+            f"converted {len(definitions)} Pandoc Div footnote(s) to [^N]: syntax "
+            f"(rewrote {n_ref} body reference(s))",
+        )
+
+    return new_text
+
+
+def repair_footnote_definitions(text: str, log: CleanupLog) -> str:
+    """Unescape and unsplit Pandoc's broken footnote-definition output.
+
+    The DOCX writer often emits `\\[^1\\]:` (with backslash-escaped
+    brackets) instead of the canonical `[^1]:`, and concatenates the
+    first footnote definition onto the trailing paragraph instead of
+    starting a new line. Both defeats footnote recognition on the
+    next render pass. We unescape and force a blank line before each
+    definition so Pandoc emits a proper `<section class="footnotes">`.
+    """
+    # 1. Unescape `\[^X\]:` → `[^X]:`. X is the footnote id (alphanumeric).
+    text, n_unescape = re.subn(r"\\\[\^([^\]]+)\\\]:", r"[^\1]:", text)
+    # 2. Ensure each footnote definition starts on its own paragraph.
+    text, n_split = re.subn(
+        r"([^\n])(\s*\[\^[^\]]+\]:)",
+        r"\1\n\n\2",
+        text,
+    )
+    if n_unescape or n_split:
+        log.record(
+            "repair_footnote_definitions",
+            n_unescape + n_split,
+            f"unescape={n_unescape} split={n_split}",
+        )
+    return text
+
+
+def convert_single_cell_tables_to_blockquotes(text: str, log: CleanupLog) -> str:
+    """Convert grid tables that have only one column to Markdown
+    blockquotes.
+
+    DOCX text boxes, sidebar callouts, and "shaded paragraph" callouts
+    all come through Pandoc as 1-column grid tables. Rendering them as
+    actual tables is wrong: they're not data tables, they're pull-out
+    callouts. Blockquotes get the right visual treatment in HTML
+    (left rule + indent) and in Typst (indented italic), so we
+    transform here.
+
+    Multi-column tables (genuine data tables) are left untouched.
+    """
+    lines = text.split("\n")
+    out: List[str] = []
+    i = 0
+    n_converted = 0
+
+    def is_separator(line: str) -> bool:
+        s = line.strip()
+        if not s.startswith("+"):
+            return False
+        # Separator chars are only +, -, :, =, whitespace.
+        return all(c in "+-=: \t" for c in s)
+
+    def column_count(sep: str) -> int:
+        # Number of `+` minus 1 gives column count.
+        return max(0, sep.count("+") - 1)
+
+    while i < len(lines):
+        line = lines[i]
+        if is_separator(line) and column_count(line) == 1:
+            # Try to find the closing separator and collect cell rows.
+            j = i + 1
+            cell_lines: List[str] = []
+            valid = False
+            while j < len(lines):
+                inner = lines[j]
+                if is_separator(inner) and column_count(inner) == 1:
+                    valid = True
+                    break
+                stripped = inner.strip()
+                # Cell row in a grid table starts and ends with `|`.
+                if stripped.startswith("|") and stripped.endswith("|"):
+                    # Strip the leading + trailing pipe; keep the cell text.
+                    content = stripped[1:-1].rstrip()
+                    cell_lines.append(content)
+                    j += 1
+                    continue
+                # Anything else aborts the conversion (could be a
+                # continuation row that didn't get split correctly).
+                break
+
+            if valid:
+                # Build blockquote. Trim leading/trailing blank cells.
+                while cell_lines and not cell_lines[0].strip():
+                    cell_lines.pop(0)
+                while cell_lines and not cell_lines[-1].strip():
+                    cell_lines.pop()
+                # Add a blank line before the blockquote if needed.
+                if out and out[-1].strip():
+                    out.append("")
+                for cl in cell_lines:
+                    s = cl.strip()
+                    if s:
+                        out.append("> " + s)
+                    else:
+                        out.append(">")
+                out.append("")  # blank line after blockquote
+                i = j + 1
+                n_converted += 1
+                continue
+
+        out.append(line)
+        i += 1
+
+    if n_converted:
+        log.record(
+            "convert_single_cell_tables_to_blockquotes",
+            n_converted,
+            "converted 1-column grid tables to blockquotes (callout boxes / text boxes)",
+        )
+    return "\n".join(out)
+
+
+def split_oneline_grid_tables(text: str, log: CleanupLog) -> str:
+    """Re-split grid tables that Pandoc emitted as one physical line.
+
+    Pandoc's `--wrap=none` (used during DOCX ingest) sometimes collapses
+    an entire grid table onto a single line: separator rows + cell rows
+    + separator rows all concatenated. The downstream MD→HTML/Typst
+    pass then fails to recognize it as a table and treats the whole
+    thing as a paragraph — running smart-typography over the `---`
+    separators and producing em-dashes in the rendered output. This
+    pass walks each line, finds all grid-table boundary tokens
+    (`+---+`-style separator runs), and re-splits the line so each
+    separator and each cell row lives on its own line.
+    """
+    sep_re = re.compile(r"\+[\-+:]{3,}\+")
+
+    def fix_line(line: str) -> str:
+        seps = list(sep_re.finditer(line))
+        if len(seps) < 2:
+            return line
+        out_parts: List[str] = []
+        cursor = 0
+        for m in seps:
+            # Text before this separator is a cell row (or whitespace).
+            between = line[cursor:m.start()].strip()
+            if between:
+                out_parts.append(between)
+            out_parts.append(m.group(0))
+            cursor = m.end()
+        tail = line[cursor:].strip()
+        if tail:
+            out_parts.append(tail)
+        return "\n".join(out_parts)
+
+    new_lines = []
+    n_split = 0
+    for line in text.split("\n"):
+        fixed = fix_line(line)
+        if fixed != line:
+            n_split += 1
+        new_lines.append(fixed)
+    if n_split:
+        log.record(
+            "split_oneline_grid_tables",
+            n_split,
+            "re-split collapsed grid tables onto multiple lines",
+        )
+    return "\n".join(new_lines)
+
+
 def normalize_dashes(text: str, log: CleanupLog) -> str:
     """Pandoc's `--smart` should handle this, but verify.
 
@@ -153,6 +445,38 @@ def normalize_dashes(text: str, log: CleanupLog) -> str:
     text = text.replace("—", "---").replace("–", "--")
     log.record("normalize_dashes", em + en, f"em={em} en={en}")
     return text
+
+
+def repair_pandoc_bold_escape(text: str, log: CleanupLog) -> str:
+    """Repair Pandoc's broken close-of-bold escape inside DOCX-derived
+    Markdown.
+
+    When Pandoc renders bold text from a DOCX cell that lives inside a
+    blockquote inside a grid table (a common shape for pedagogical
+    handouts), it sometimes emits the closing `**` with one asterisk
+    escaped: `**Directions: ... class!\\**`. The leading backslash makes
+    the first `*` literal, so the bold span never closes — the rendered
+    HTML shows the literal asterisks and (worse) opens an unclosed
+    emphasis that bleeds into the following cell.
+
+    The pattern `\\**` (backslash + two asterisks, with no second
+    backslash) is virtually unique to this Pandoc bug — in legitimate
+    Markdown an author who wants literal `**` would escape BOTH
+    asterisks as `\\*\\*`. So we treat any `\\**` as a misplaced bold
+    close and replace it with `**`.
+    """
+    # `\**` followed by zero-or-more spaces — captures the common case
+    # where the broken close sits right before a cell delimiter or end
+    # of line. Don't touch `\*\*` (both escaped — legitimate literal).
+    pattern = re.compile(r"(?<!\\)\\\*\*")
+    new_text, n = pattern.subn("**", text)
+    if n:
+        log.record(
+            "repair_pandoc_bold_escape",
+            n,
+            "fixed broken close-of-bold (Pandoc DOCX writer quirk)",
+        )
+    return new_text
 
 
 def normalize_smart_quotes(text: str, log: CleanupLog) -> str:
@@ -319,13 +643,80 @@ class ExtractedFrontMatter:
     body_after_strip: str = ""
 
 
+# Author-affiliation regex. We accept em-dash, en-dash, triple-hyphen,
+# and double-hyphen as the separator, because authors paste from many
+# sources. But the regex alone isn't enough — body prose often contains
+# the same separators mid-sentence (e.g., "face the world--fatalistically").
+# So we follow up with `_is_author_affil_line`, which adds shape and
+# length constraints that body sentences fail.
 _AUTHOR_AFFIL_RE = re.compile(
     r"^(?P<name>.+?)\s*(?:—|–|---|--)\s*(?P<aff>.+)$"
 )
 
+# Tokens / punctuation that almost never appear inside a real author name
+# but do appear in body prose. Hitting any of these in `name` disqualifies
+# the line as an author/affiliation header. We deliberately allow `.` so
+# initials (J. K. Rowling) survive; the word-count check below catches
+# longer prose passages.
+_BODY_PROSE_MARKERS_NAME = re.compile(r"""[?!;:"*()\[\]/]""")
+# Same idea for affiliations: an affiliation rarely contains quotes,
+# semicolons, asterisks, italic markers, or sentence-internal lowercase
+# transitions.
+_BODY_PROSE_MARKERS_AFF = re.compile(r"""[?!;"*]|\.\s+[a-z]""")
+
+
+def _looks_like_name(s: str) -> bool:
+    """Does this string look like a person's name (1–6 capitalized words)?
+
+    Allowed: "Justin Lewis", "J.K. Rowling", "Min-Zhan Lu",
+    "Lewis, Justin", "Sano-Franchini, J.".
+    Rejected: anything starting lowercase, sentence-shaped strings, very
+    long strings.
+    """
+    s = s.strip()
+    if not s or len(s) > 80:
+        return False
+    if not s[0].isalpha() or not s[0].isupper():
+        return False
+    words = s.split()
+    if not (1 <= len(words) <= 6):
+        return False
+    if _BODY_PROSE_MARKERS_NAME.search(s):
+        return False
+    return True
+
+
+def _looks_like_affiliation(s: str) -> bool:
+    """Does this string look like a university/affiliation line?
+
+    Allowed: "University of Washington", "Iowa State University",
+    "Independent scholar".
+    Rejected: anything containing body-prose markers, very long strings,
+    or strings starting with lowercase.
+    """
+    s = s.strip()
+    if not s or len(s) > 120:
+        return False
+    if not s[0].isalpha() or not s[0].isupper():
+        return False
+    words = s.split()
+    if not (1 <= len(words) <= 18):
+        return False
+    if _BODY_PROSE_MARKERS_AFF.search(s):
+        return False
+    return True
+
 
 def _is_author_affil_line(s: str) -> bool:
-    return bool(_AUTHOR_AFFIL_RE.match(s.strip()))
+    """Strict check: line matches the author-affiliation shape AND both
+    halves pass name/affiliation validation. The strictness is what
+    keeps mid-sentence em-dashes in body prose from being misread as
+    author/affil delimiters during ingest."""
+    s = s.strip()
+    m = _AUTHOR_AFFIL_RE.match(s)
+    if not m:
+        return False
+    return _looks_like_name(m.group("name")) and _looks_like_affiliation(m.group("aff"))
 
 
 def _skip_blanks(lines, i):
@@ -384,15 +775,15 @@ def extract_lics_front_matter(text: str) -> ExtractedFrontMatter:
             i = j
             break
         m = _AUTHOR_AFFIL_RE.match(cand)
-        if m:
+        if m and _looks_like_name(m.group("name")) and _looks_like_affiliation(m.group("aff")):
             fm.authors.append(
                 {"name": m.group("name").strip(), "affiliation": m.group("aff").strip()}
             )
             i = j + 1
             continue
-        # Bare author name (no affiliation): accept only if we've already seen one,
-        # to avoid grabbing a stray body line.
-        if fm.authors and 1 <= len(cand.split()) <= 6:
+        # Bare author name (no affiliation): accept only if we've already
+        # seen one AND it passes the name shape check.
+        if fm.authors and _looks_like_name(cand):
             fm.authors.append({"name": cand, "affiliation": None})
             i = j + 1
             continue
@@ -500,9 +891,14 @@ DEFAULT_PASSES: List[Pass] = [
     strip_underline_spans,
     unescape_quoted_brackets,
     reassemble_heading_linebreaks,
+    split_oneline_grid_tables,
+    convert_single_cell_tables_to_blockquotes,
+    convert_pandoc_div_footnotes_to_native,
+    repair_footnote_definitions,
     conservative_list_normalization,
     strip_orphan_page_numbers,
     normalize_dashes,
+    repair_pandoc_bold_escape,
     normalize_smart_quotes,
     unfragment_works_cited,
 ]

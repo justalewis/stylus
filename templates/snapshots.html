@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Snapshots | {{ article['title'] }}{% endblock %}
+{% block content %}
+<nav class="crumbs">
+  <a href="{{ url_for('article_home', article_id=article['id']) }}">{{ article['slug'] }}</a>
+  <span class="sep">›</span>
+  <span>Snapshots</span>
+</nav>
+<section class="card">
+  <h1 style="margin-top:0;">article.md snapshots</h1>
+  <p class="dim">
+    Each time article.md is rewritten (cleanups, re-clean from source, TinyMCE save, Re-clean Claude pass, etc.) the previous version is snapshotted here. Click any snapshot to diff it against the current article.md.
+  </p>
+  {% if not snapshots %}
+  <p class="dim">No snapshots yet.</p>
+  {% else %}
+  <table class="data" style="margin-top: var(--space-3);">
+    <thead><tr><th>Snapshot</th><th>Size</th><th>Saved</th><th></th></tr></thead>
+    <tbody>
+      {% for s in snapshots %}
+      <tr>
+        <td><code>{{ s.name }}</code></td>
+        <td class="dim">{{ "{:,}".format(s.size) }} bytes</td>
+        <td class="dim">{{ s.mtime|int }}</td>
+        <td>
+          <a class="button ghost small" href="{{ url_for('article_diff', article_id=article['id'], snapshot=s.name) }}">Diff vs. current →</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endblock %}

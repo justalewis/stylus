@@ -12,3 +12,22 @@ pypdfium2>=4.30
 bibtexparser>=1.4
 html5validator>=0.4
 werkzeug>=3.0
+
+# --- Optional integrations (graceful degrade if missing) ---
+# Mammoth: alternate DOCX -> HTML reader, often better for text boxes and
+# complex tables than Pandoc. See preprocessors.py.
+mammoth>=1.7
+
+# WeasyPrint: alternate PDF renderer using the same HTML+CSS as the
+# galley. Gives HTML/PDF visual parity. See conversion.render_pdf_weasy.
+weasyprint>=62
+
+# Anthropic SDK: opt-in LLM cleanup pass. Requires env ANTHROPIC_API_KEY.
+# See llm_cleanup.py.
+anthropic>=0.40
+
+# Tesseract OCR: opt-in pass for tables-as-images. Requires the tesseract
+# CLI on PATH separately (apt install tesseract-ocr / brew install tesseract /
+# Windows installer from UB-Mannheim). See ocr.py.
+pytesseract>=0.3
+Pillow>=10

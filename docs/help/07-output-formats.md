@@ -1,6 +1,16 @@
 # Output formats
 
-The tool produces five output formats from each article's Markdown source. All are derivative; the Markdown is canonical.
+The tool produces seven output formats from each article's Markdown source. All are derivative; the Markdown is canonical.
+
+| Format | When to use | Route |
+|---|---|---|
+| HTML galley | OJS HTML galley, web reading, archival | `/articles/<id>/html` |
+| Tagged PDF (Typst) | Print archival, OJS PDF galley, primary distribution | `/articles/<id>/pdf` |
+| Alt PDF (WeasyPrint) | HTML/PDF visual parity (optional engine) | `Tools → Advanced → Render PDF (WeasyPrint)` |
+| EPUB | E-reader distribution, library | `/articles/<id>/epub` |
+| JATS XML | PMC, DOAJ, EBSCO, indexer submission | `/articles/<id>/jats.xml` |
+| CrossRef XML | DOI deposit | `/articles/<id>/crossref.xml` |
+| OJS ZIP | One-click OJS galley upload (HTML + CSS + assets bundled) | `/articles/<id>/ojs-package` |
 
 ## HTML
 

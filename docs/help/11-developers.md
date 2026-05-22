@@ -13,20 +13,40 @@ Graphion/
   conversion.py       ← The big one. Stages 1, 3, 4 of the pipeline.
                         Article ingest, cleanup orchestration, render,
                         issue assembly, front-matter rendering.
+                        Includes WeasyPrint alternate-PDF render path.
   cleanups.py         ← Stage 2: deterministic Markdown cleanup passes.
   crossref.py         ← CrossRef deposit XML emitter, DOI assignment,
                         BibTeX parsing for structured citations.
   jats.py             ← JATS XML emitter.
   lint.py             ← Composable per-article validation checks.
+  citation_styles.py  ← Bundled CSL stylesheets + picker logic.
+  bib_builder.py      ← Heuristic prose-Works-Cited → BibTeX parser
+                        (powers the top-nav Bib Builder page).
+  preprocessors.py    ← Optional DOCX-side ingest helpers: Mammoth (alt
+                        DOCX reader), LibreOffice (round-trip normalizer),
+                        python-docx structural scan (warnings on upload).
+  stylize.py          ← Claude-powered "Stylize article" call. Reads the
+                        per-journal style guide, applies it to the body.
+  llm_cleanup.py      ← Other targeted Claude helpers: alt-text gen,
+                        table repair, paragraph polish.
+  validators.py       ← External-tool wrappers: verapdf (PDF/UA),
+                        pa11y (HTML a11y audit).
+  ocr.py              ← Tesseract OCR for images-as-tables recovery.
+  ojs_client.py       ← OJS REST API client stub for direct galley
+                        submission (env-var configured).
   seed.py             ← Initial DB + LiCS journal + admin user seed.
   smoketest.py        ← End-to-end pipeline runner for development.
   render_pages.py     ← Rasterize a PDF to PNG (for previews).
   templates/          ← Jinja2 admin UI templates
   static/             ← CSS (Lewis Design System tokens + project stylesheet)
   content/            ← Journals, articles, issues — filesystem-first
+                        Per-journal style guides live at
+                        content/journals/<slug>/template/style-guide.md
   docs/               ← Markdown source for /help docs and roadmap
   tests/              ← pytest unit tests (cleanups + metadata round-trip)
 ```
+
+All advanced modules (`preprocessors`, `stylize`, `llm_cleanup`, `validators`, `ocr`, `ojs_client`) expose an `available()` function that returns `False` cleanly when their dependency is missing. The app uses these probes to grey-out UI elements; no startup hard-failure if e.g. `anthropic` isn't installed.
 
 ## Adding a new feature
 

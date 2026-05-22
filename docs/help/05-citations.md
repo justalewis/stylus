@@ -23,6 +23,16 @@ This is fine for most articles you're laying out from manuscripts that already u
 
 Drop a `references.bib` into the article via the **Bibliography (BibTeX)** uploader on the article home page (or place the file directly at `content/journals/<slug>/issues/<issue>/articles/<article>/references.bib`).
 
+**Don't have a `.bib` file from a reference manager?** The top-nav **Bib Builder** takes a pasted prose Works Cited list (MLA, APA, or Chicago) and emits a `.bib`. It's a heuristic — review the output before uploading — but it's much faster than typing entries by hand. The article's bibliography uploader links to it directly. Patterns the parser recognizes:
+
+- Authors in either `Last, First` (MLA) or `Last, F. M.` (APA) form, with `et al.` and the MLA repeat-dash (`---.`) supported.
+- Italicized book or journal titles (`*Title*`) and double-quoted article titles.
+- Volume/issue in MLA (`vol. 57, no. 4`), Chicago (`57, no. 4`), and APA (`57(4)`) forms.
+- Page ranges with or without the `pp.` prefix.
+- DOIs (`https://doi.org/...` or `doi:...`) and bare URLs.
+
+Anything that doesn't classify cleanly drops into a `note` field so the citation isn't lost.
+
 Write in-text citations using Pandoc citation syntax:
 
 ```markdown

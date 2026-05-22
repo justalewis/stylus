@@ -13,7 +13,7 @@ PANDOC_PATH = os.environ.get("PANDOC_PATH", "pandoc")
 TYPST_PATH = os.environ.get("TYPST_PATH", "typst")
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-ALLOWED_UPLOAD_EXTENSIONS = {".docx"}
+ALLOWED_UPLOAD_EXTENSIONS = {".docx", ".md", ".markdown"}
 
 VERSIONS_KEEP = 5
 

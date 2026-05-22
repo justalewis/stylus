@@ -6,10 +6,17 @@
     display: flex;
     gap: var(--space-2);
     align-items: center;
-    padding: var(--space-3) 0 var(--space-3);
+    padding: var(--space-3) var(--space-3);
     border-bottom: 1px solid var(--rule);
-    margin-bottom: var(--space-4);
+    margin: 0 calc(var(--space-3) * -1) var(--space-4);
     flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--paper);
+    backdrop-filter: saturate(140%) blur(8px);
+    -webkit-backdrop-filter: saturate(140%) blur(8px);
+    box-shadow: 0 1px 0 var(--rule), 0 4px 12px -8px rgba(0,0,0,0.08);
   }
   .editor-toolbar .group {
     display: flex;
@@ -111,15 +118,21 @@
       <button type="button" class="tb" data-cmd="quote" title="Blockquote">"</button>
     </div>
     <div class="group">
+      <button type="button" class="tb" data-cmd="image" title="Insert image (uploads to article assets/)">img</button>
+    </div>
+    <div class="group">
       <button type="button" class="tb" data-cmd="undo" title="Undo (Ctrl+Z)">undo</button>
       <button type="button" class="tb" data-cmd="redo" title="Redo (Ctrl+Y)">redo</button>
     </div>
+    <input type="file" id="image-upload-input" accept="image/*" hidden />
+    <span class="dim image-upload-status" id="image-upload-status" style="display:none;"></span>
     <button type="button" class="button" id="save-btn" style="margin-left: auto;">Save</button>
     <span class="save-status" id="save-status"></span>
   </div>
 
   <div id="editor-host"></div>
   <textarea id="initial-body" hidden>{{ body }}</textarea>
+  <script id="asset-upload-config" type="application/json">{{ {'upload_url': url_for('article_upload_asset', article_id=article['id'])} | tojson }}</script>
 </section>
 
 <script type="module">
@@ -150,6 +163,51 @@
     return true;
   }
 
+  // Image insertion: click the toolbar button → file picker → POST the
+  // file to /upload-asset → insert a ProseMirror image node pointing at
+  // the returned relative path. The upload URL is rendered into the page
+  // via Flask's url_for so this template doesn't have to guess.
+  const uploadUrl = JSON.parse(document.getElementById('asset-upload-config').textContent).upload_url;
+  const imageInput = document.getElementById('image-upload-input');
+  const imageStatus = document.getElementById('image-upload-status');
+
+  async function insertImage(state, dispatch) {
+    // Trigger the hidden file input; actual insertion happens in its
+    // change handler, so we return true here just to signal the toolbar
+    // that the command "ran".
+    imageInput.value = "";
+    imageInput.click();
+    return true;
+  }
+
+  imageInput.addEventListener('change', async () => {
+    const file = imageInput.files && imageInput.files[0];
+    if (!file) return;
+    imageStatus.style.display = '';
+    imageStatus.textContent = `Uploading ${file.name}...`;
+    try {
+      const fd = new FormData();
+      fd.append('asset', file);
+      const r = await fetch(uploadUrl, { method: 'POST', body: fd });
+      const data = await r.json();
+      if (!data.ok) {
+        imageStatus.textContent = `Upload failed: ${data.error || 'unknown error'}`;
+        return;
+      }
+      const imgNode = schema.nodes.image.create({
+        src: data.path,
+        alt: file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' '),
+      });
+      const tr = view.state.tr.replaceSelectionWith(imgNode);
+      view.dispatch(tr);
+      view.focus();
+      imageStatus.textContent = `Inserted ${data.filename} (${data.bytes.toLocaleString()} bytes).`;
+      setTimeout(() => { imageStatus.style.display = 'none'; }, 4000);
+    } catch (e) {
+      imageStatus.textContent = `Upload failed: ${e}`;
+    }
+  });
+
   const cmds = {
     bold: cmdBold,
     italic: cmdItalic,
@@ -162,6 +220,7 @@
     ul: wrapInList(schema.nodes.bullet_list),
     ol: wrapInList(schema.nodes.ordered_list),
     quote: wrapIn(schema.nodes.blockquote),
+    image: insertImage,
     undo: undo,
     redo: redo,
   };

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -540,12 +541,20 @@ def register_routes(app: Flask):
             abort(404)
 
         if request.method == "POST":
-            f = request.files.get("docx")
+            # Accept either a .docx (preferred) OR a .md file uploaded
+            # directly (for users authoring with Writage, Pandoc CLI, or
+            # by hand). The two paths diverge only in Stage 1 — .docx
+            # goes through `ingest_docx`; .md skips ingest and the file
+            # is copied straight into the article dir as article-raw.md.
+            f = (request.files.get("docx") or request.files.get("source")
+                 or request.files.get("md"))
             slug_override = request.form.get("slug", "").strip()
             title_hint = request.form.get("title", "").strip()
             short_title = request.form.get("short_title", "").strip()
             short_authors = request.form.get("short_authors", "").strip()
             accept_tc = request.form.get("track_changes", "accept") == "accept"
+            ingest_engine = request.form.get("ingest_engine", "pandoc")
+            preprocess_lo = request.form.get("preprocess_lo") == "on"
 
             if not f or not f.filename:
                 flash("No file uploaded.", "error")
@@ -555,8 +564,13 @@ def register_routes(app: Flask):
                 return redirect(request.url)
 
             filename = secure_filename(f.filename)
-            if Path(filename).suffix.lower() not in ALLOWED_UPLOAD_EXTENSIONS:
-                flash("Only .docx files are accepted.", "error")
+            ext = Path(filename).suffix.lower()
+            if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+                flash(
+                    f"Unsupported file type {ext!r}. Allowed: "
+                    f"{', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))}.",
+                    "error",
+                )
                 return redirect(request.url)
 
             article_slug = slug_override or slugify(Path(filename).stem)
@@ -573,7 +587,67 @@ def register_routes(app: Flask):
             f.save(staged)
 
             try:
-                conversion.ingest_docx(staged, apath, accept_track_changes=accept_tc)
+                import preprocessors
+
+                if ext == ".docx":
+                    # Step 1 (optional): LibreOffice round-trip
+                    # normalization. Cleans up text-box-heavy or
+                    # weirdly-saved Word documents.
+                    docx_for_ingest = staged
+                    if preprocess_lo and preprocessors.libreoffice_available():
+                        normalized, lo_log = preprocessors.libreoffice_normalize(
+                            staged, apath / ".lo-tmp",
+                        )
+                        if normalized:
+                            docx_for_ingest = normalized
+                            flash(
+                                "LibreOffice normalization succeeded — "
+                                "ingest will use the normalized DOCX.",
+                                "success",
+                            )
+
+                    # Step 2: structural scan + warnings.
+                    warnings = preprocessors.scan_docx_for_warnings(docx_for_ingest)
+                    for w in warnings:
+                        flash(f"DOCX warning: {w}", "warning")
+
+                    # Step 3: actual ingest. Either Mammoth or Pandoc.
+                    if ingest_engine == "mammoth":
+                        if not preprocessors.mammoth_available():
+                            flash(
+                                "Mammoth not installed; falling back to "
+                                "Pandoc. Run `pip install mammoth` to enable.",
+                                "warning",
+                            )
+                            conversion.ingest_docx(
+                                docx_for_ingest, apath,
+                                accept_track_changes=accept_tc,
+                            )
+                        else:
+                            raw, log = preprocessors.ingest_with_mammoth(
+                                docx_for_ingest, apath,
+                            )
+                            if raw is None:
+                                flash(f"Mammoth ingest failed: {log}", "error")
+                                return redirect(request.url)
+                            # Append the mammoth log so the user can see
+                            # what happened.
+                            conversion._append_log(
+                                apath, "Stage 1: DOCX ingest (mammoth)", log,
+                            )
+                    else:
+                        conversion.ingest_docx(
+                            docx_for_ingest, apath,
+                            accept_track_changes=accept_tc,
+                        )
+                else:
+                    # Markdown bypass: copy uploaded MD straight to
+                    # article-raw.md so cleanups can run on it.
+                    raw = apath / "article-raw.md"
+                    raw.write_text(
+                        staged.read_text(encoding="utf-8"),
+                        encoding="utf-8",
+                    )
                 conversion.run_cleanups(
                     apath,
                     issue_metadata={
@@ -586,18 +660,44 @@ def register_routes(app: Flask):
                 return redirect(request.url)
 
             title = title_hint or _peek_title(apath / "article.md") or article_slug
-            article_id = db.execute(
-                "INSERT INTO articles (journal_id, slug, title, project_path, status) "
-                "VALUES (?, ?, ?, ?, 'draft')",
-                (journal["id"], article_slug, title, str(apath)),
-            )
+            try:
+                article_id = db.execute(
+                    "INSERT INTO articles (journal_id, slug, title, project_path, status) "
+                    "VALUES (?, ?, ?, ?, 'draft')",
+                    (journal["id"], article_slug, title, str(apath)),
+                )
+            except sqlite3.IntegrityError:
+                # UNIQUE(journal_id, slug) collision. The pre-check above
+                # missed it (case-insensitive collation, whitespace, or a
+                # double-submit). Clean up the directory we just created
+                # so the user can retry with a different slug without
+                # leftover litter.
+                import shutil
+                try:
+                    if apath.exists() and apath.is_dir():
+                        shutil.rmtree(apath)
+                except Exception:
+                    pass
+                flash(
+                    f"An article with slug {article_slug!r} already exists in this "
+                    "journal. Pick a different slug (use the 'Slug' field on the "
+                    "upload form to override the auto-derived value).",
+                    "error",
+                )
+                return redirect(request.url)
             conversion.record_conversion(
-                article_id, "docx",
+                article_id, ext.lstrip("."),
                 f"ingest + cleanups OK; project_path={apath}",
             )
             return redirect(url_for("article_home", article_id=article_id))
 
-        return render_template("upload.html", journal=journal)
+        import preprocessors
+        return render_template(
+            "upload.html",
+            journal=journal,
+            mammoth_available=preprocessors.mammoth_available(),
+            libreoffice_available=preprocessors.libreoffice_available(),
+        )
 
     # ---------- article ----------
 
@@ -611,13 +711,121 @@ def register_routes(app: Flask):
         )
         if not article:
             abort(404)
-        log_path = Path(article["project_path"]) / "conversion.log"
+        apath = Path(article["project_path"])
+        log_path = apath / "conversion.log"
         log_text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
-        rendered_html = (Path(article["project_path"]) / "article.html").exists()
-        rendered_pdf = (Path(article["project_path"]) / "article.pdf").exists()
-        override_css_path = Path(article["project_path"]) / "article-override.css"
+        rendered_html = (apath / "article.html").exists()
+        rendered_pdf = (apath / "article.pdf").exists()
+        override_css_path = apath / "article-override.css"
         has_override = override_css_path.exists()
         override_size = override_css_path.stat().st_size if has_override else 0
+        # Detect grid- or pipe-table syntax so the article page can warn
+        # about WYSIWYG editing (ProseMirror's default schema has no
+        # table support; opening + saving will mangle them).
+        has_tables = False
+        md_path = apath / "article.md"
+        if md_path.exists():
+            sample = md_path.read_text(encoding="utf-8", errors="replace")
+            has_tables = ("+---" in sample
+                          or "+:---" in sample
+                          or "+-+" in sample)
+        # Probe optional engine/validator availability so the Advanced
+        # section can grey-out buttons that need missing dependencies.
+        import validators
+        import llm_cleanup
+        import ocr as ocr_mod
+        # Surface missing image references so the editor can fix them
+        # before clicking Render.
+        missing_images = conversion.check_missing_image_references(apath)
+
+        # ---- Status-strip data ----
+        # Compute everything in one shot so the strip can render without
+        # additional queries. All inexpensive (a single file read + a
+        # few regex passes).
+        import re as _re
+        stats = {
+            "sections": 0,
+            "images": 0,
+            "tables": 0,
+            "missing": len(missing_images),
+            "words": 0,
+            "has_bib": (apath / "references.bib").exists(),
+            "has_override": has_override,
+            "last_rendered": None,
+            "last_rendered_iso": None,
+            "weasy_pdf_exists": (apath / "article-weasy.pdf").exists(),
+            "issue_id": article["issue_id"] if "issue_id" in article.keys() else None,
+            "issue_label": None,
+        }
+        if md_path.exists():
+            body_text = md_path.read_text(encoding="utf-8", errors="replace")
+            # Strip YAML front matter for a cleaner word count.
+            body_only = body_text
+            if body_only.startswith("---\n"):
+                end = body_only.find("\n---", 4)
+                if end != -1:
+                    body_only = body_only[end + 4:]
+            stats["sections"] = len(_re.findall(r"^#{1,3}\s+\S", body_only, _re.MULTILINE))
+            stats["images"] = len(_re.findall(r"!\[[^\]]*\]\([^)\s]+\)", body_only))
+            stats["tables"] = (
+                body_only.count("\n+---") + body_only.count("\n+:--")
+                # Plus pipe tables: lines starting with `| ` followed
+                # by a `|---|` separator line.
+                + len(_re.findall(r"^\|.+\|\s*$\n^\|[-: |]+\|\s*$", body_only, _re.MULTILINE))
+            )
+            # Approximate word count: split on whitespace, drop short tokens.
+            stats["words"] = sum(1 for w in body_only.split() if len(w) > 1)
+        # Last-rendered time: pick the latest mtime of article.html/pdf.
+        latest = 0
+        for name in ("article.html", "article.pdf"):
+            p = apath / name
+            if p.exists():
+                latest = max(latest, p.stat().st_mtime)
+        if latest:
+            from datetime import datetime, timezone
+            dt = datetime.fromtimestamp(latest, tz=timezone.utc).astimezone()
+            stats["last_rendered_iso"] = dt.isoformat(timespec="seconds")
+            # Human-readable "Nh ago" string.
+            from datetime import datetime as _dt
+            ago = _dt.now(timezone.utc).timestamp() - latest
+            if ago < 60:
+                stats["last_rendered"] = "just now"
+            elif ago < 3600:
+                stats["last_rendered"] = f"{int(ago // 60)}m ago"
+            elif ago < 86400:
+                stats["last_rendered"] = f"{int(ago // 3600)}h ago"
+            else:
+                stats["last_rendered"] = f"{int(ago // 86400)}d ago"
+
+        # Issue label for breadcrumb.
+        article_issue_id = article["issue_id"] if "issue_id" in article.keys() else None
+        if article_issue_id:
+            issue_row = db.query_one(
+                "SELECT volume, issue_number, year FROM issues WHERE id = ?",
+                (article_issue_id,),
+            )
+            if issue_row:
+                stats["issue_label"] = (
+                    f"v{issue_row['volume']}.{issue_row['issue_number']} "
+                    f"({issue_row['year']})"
+                )
+
+        # Recent activity: last 3 log timestamps from conversion.log.
+        recent_activity: list[dict] = []
+        if log_text:
+            for m in _re.finditer(
+                r"=== ([\d\-T:+]+)\s+(.+?) ===", log_text,
+            ):
+                recent_activity.append({"when": m.group(1), "what": m.group(2)})
+            recent_activity = recent_activity[-3:][::-1]
+
+        # Snapshot count for the "Compare" / "Diff" button.
+        versions_dir = apath / ".versions"
+        snapshot_count = (
+            sum(1 for _ in versions_dir.glob("article-*.md"))
+            if versions_dir.exists() else 0
+        )
+
         return render_template(
             "article.html",
             article=article,
@@ -626,6 +834,16 @@ def register_routes(app: Flask):
             rendered_pdf=rendered_pdf,
             has_override=has_override,
             override_size=override_size,
+            has_tables=has_tables,
+            missing_images=missing_images,
+            weasyprint_ok=conversion.weasyprint_available(),
+            verapdf_ok=validators.verapdf_available(),
+            pa11y_ok=validators.pa11y_available(),
+            llm_ok=llm_cleanup.available(),
+            ocr_ok=ocr_mod.available(),
+            stats=stats,
+            recent_activity=recent_activity,
+            snapshot_count=snapshot_count,
         )
 
     @app.route("/articles/<int:article_id>/metadata", methods=["GET", "POST"])
@@ -780,6 +998,84 @@ def register_routes(app: Flask):
 
         fm, body = conversion.read_article_metadata(apath)
         return render_template("edit_wysiwyg.html", article=article, body=body, fm=fm)
+
+    @app.route("/articles/<int:article_id>/edit/tinymce", methods=["GET", "POST"])
+    @login_required
+    def article_edit_tinymce(article_id):
+        """Rich-toolbar WYSIWYG editing via TinyMCE.
+
+        TinyMCE is HTML-based but our canonical source is Markdown, so
+        we transcode on each side of the editor:
+          - GET: Pandoc converts article.md (body only) -> HTML, which
+            TinyMCE loads.
+          - POST: TinyMCE returns HTML; Pandoc converts HTML -> MD, and
+            we write that back to article.md (preserving YAML front
+            matter via the canonical writer).
+
+        Round-trip is lossy for some Pandoc-specific extensions (math,
+        citations, raw attributes), but lossless enough for the
+        formatting TinyMCE actually adds: bold/italic/underline, lists,
+        tables, alignment, links, images, blockquotes, code, headings.
+        Articles with footnotes survive too — Pandoc emits `[^N]` /
+        `[^N]:` in both directions.
+        """
+        import pypandoc
+        article = db.query_one("SELECT * FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        apath = Path(article["project_path"])
+        md_path = apath / "article.md"
+
+        if request.method == "POST":
+            payload = request.get_json(silent=True) or {}
+            html_body = payload.get("body", "")
+            # Convert HTML -> Markdown.
+            #
+            # Pandoc-flavored `markdown` (not `markdown_strict`) is the
+            # right target: it includes `grid_tables` which can preserve
+            # multi-paragraph cells (essential for the tables Word users
+            # paste in). We DISABLE `raw_html` so Pandoc is forced to
+            # convert HTML tables into native Markdown table syntax
+            # rather than dumping the original `<table>` markup inline
+            # — raw HTML survives in MD but Pandoc's Typst writer can't
+            # render it.
+            try:
+                md_body = pypandoc.convert_text(
+                    html_body,
+                    to="markdown+grid_tables+pipe_tables+footnotes+yaml_metadata_block-raw_html-native_divs-native_spans",
+                    format="html",
+                    extra_args=["--wrap=none"],
+                )
+            except Exception as exc:
+                return jsonify({"ok": False, "error": f"HTML->MD failed: {exc}"}), 500
+            fm, _existing_body = conversion.read_article_metadata(apath)
+            if fm:
+                conversion.write_article_metadata(apath, fm, md_body)
+            else:
+                conversion.save_markdown(apath, md_body, note="tinymce save")
+            db.execute(
+                "UPDATE articles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (article_id,),
+            )
+            return jsonify({"ok": True, "bytes": len(md_body)})
+
+        # GET: render Markdown -> HTML for TinyMCE to load.
+        fm, body = conversion.read_article_metadata(apath)
+        try:
+            html_body = pypandoc.convert_text(
+                body,
+                to="html",
+                format="markdown+pipe_tables+grid_tables+footnotes+yaml_metadata_block",
+                extra_args=["--wrap=none"],
+            )
+        except Exception as exc:
+            flash(f"Could not convert article.md -> HTML for editor: {exc}", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+        return render_template(
+            "edit_tinymce.html",
+            article=article,
+            html_body=html_body,
+        )
 
     @app.route("/articles/<int:article_id>/edit", methods=["GET", "POST"])
     @login_required
@@ -1040,6 +1336,679 @@ def register_routes(app: Flask):
         flash(f"Bibliography saved ({target.stat().st_size:,} bytes). Re-render to use it.", "success")
         return redirect(url_for("article_home", article_id=article_id))
 
+    @app.route("/articles/<int:article_id>/render-weasy", methods=["POST"])
+    @login_required
+    def article_render_weasy(article_id):
+        """Render an alternate PDF via WeasyPrint from the HTML galley.
+        Output: article-weasy.pdf alongside the standard article.pdf."""
+        article = db.query_one(
+            "SELECT a.*, j.slug AS journal_slug FROM articles a "
+            "JOIN journals j ON a.journal_id = j.id WHERE a.id = ?",
+            (article_id,),
+        )
+        if not article:
+            abort(404)
+        try:
+            out = conversion.render_pdf_weasy(
+                Path(article["project_path"]), article["journal_slug"],
+            )
+            flash(f"WeasyPrint PDF rendered: {out.name}", "success")
+        except Exception as exc:
+            flash(f"WeasyPrint render failed: {exc}", "error")
+        return redirect(url_for("article_home", article_id=article_id))
+
+    @app.route("/articles/<int:article_id>/validate-pdf", methods=["POST"])
+    @login_required
+    def article_validate_pdf(article_id):
+        """Run verapdf PDF/UA accessibility validation on article.pdf."""
+        import validators
+        article = db.query_one("SELECT project_path FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        pdf = Path(article["project_path"]) / "article.pdf"
+        if not pdf.exists():
+            flash("No article.pdf to validate. Render first.", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+        passed, report = validators.run_verapdf(pdf)
+        # Save the full report next to the PDF for later inspection.
+        (Path(article["project_path"]) / "verapdf-report.json").write_text(
+            __import__("json").dumps(report, indent=2), encoding="utf-8",
+        )
+        if passed:
+            flash("PDF/UA-1 validation passed. Report saved to verapdf-report.json.", "success")
+        else:
+            err = report.get("error", "see verapdf-report.json for details")
+            flash(f"PDF/UA-1 validation failed. {err}", "warning")
+        return redirect(url_for("article_home", article_id=article_id))
+
+    @app.route("/articles/<int:article_id>/validate-html", methods=["POST"])
+    @login_required
+    def article_validate_html(article_id):
+        """Run pa11y accessibility audit on article.html."""
+        import validators
+        article = db.query_one("SELECT project_path FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        html = Path(article["project_path"]) / "article.html"
+        if not html.exists():
+            flash("No article.html to audit. Render first.", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+        passed, issues = validators.run_pa11y(html)
+        (Path(article["project_path"]) / "pa11y-report.json").write_text(
+            __import__("json").dumps(issues, indent=2), encoding="utf-8",
+        )
+        if passed:
+            flash("Accessibility audit clean — 0 issues found.", "success")
+        else:
+            errors = sum(1 for i in issues if i.get("type") == "error")
+            warnings_n = sum(1 for i in issues if i.get("type") == "warning")
+            flash(
+                f"Accessibility audit found {errors} error(s), {warnings_n} warning(s). "
+                "See pa11y-report.json for details.",
+                "warning",
+            )
+        return redirect(url_for("article_home", article_id=article_id))
+
+    @app.route("/articles/<int:article_id>/stylize", methods=["POST"])
+    @login_required
+    def article_stylize(article_id):
+        """Send the article body + journal style guide to Claude and
+        write back the restructured result. The journal's style guide
+        lives at `content/journals/<slug>/template/style-guide.md`; if
+        present it's used verbatim, otherwise Claude falls back to
+        general MLA conventions.
+
+        Snapshot before write so the user can roll back via the
+        snapshots view if Claude misbehaves. The YAML front matter is
+        preserved by the canonical writer; only the body is sent to
+        Claude.
+        """
+        import stylize
+        if not stylize.available():
+            flash(
+                "Claude API unavailable. Set ANTHROPIC_API_KEY and "
+                "`pip install anthropic`.",
+                "error",
+            )
+            return redirect(url_for("article_home", article_id=article_id))
+        article = db.query_one(
+            "SELECT a.*, j.slug AS journal_slug FROM articles a "
+            "JOIN journals j ON a.journal_id = j.id WHERE a.id = ?",
+            (article_id,),
+        )
+        if not article:
+            abort(404)
+        apath = Path(article["project_path"])
+        tpl_dir = conversion.template_dir(article["journal_slug"])
+        style_guide = stylize.load_style_guide(tpl_dir)
+
+        fm, body = conversion.read_article_metadata(apath)
+        if not body.strip():
+            flash("Article body is empty.", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+
+        try:
+            new_body, meta = stylize.stylize(
+                body, style_guide,
+                article_title=str(fm.get("title", "") if fm else ""),
+            )
+        except Exception as exc:
+            flash(f"Claude API error: {exc}", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+
+        if new_body is None:
+            flash(meta.get("error", "Stylize failed"), "error")
+            return redirect(url_for("article_home", article_id=article_id))
+
+        # Snapshot before writing — gives the user one-click rollback
+        # via the Snapshots view if Claude misbehaves.
+        conversion._snapshot_version(apath)
+        if fm:
+            conversion.write_article_metadata(apath, fm, new_body)
+        else:
+            conversion.save_markdown(apath, new_body, note="stylize via Claude")
+
+        flash(
+            f"Stylized via {meta.get('model', 'Claude')}: "
+            f"{meta.get('input_tokens', 0):,} input + "
+            f"{meta.get('output_tokens', 0):,} output tokens "
+            f"(~${meta.get('estimated_cost_usd', 0):.4f}). "
+            "Original snapshotted to .versions/. Re-render to apply.",
+            "success",
+        )
+        return redirect(url_for("article_home", article_id=article_id))
+
+    @app.route("/articles/<int:article_id>/llm-tables", methods=["POST"])
+    @login_required
+    def article_llm_repair_tables(article_id):
+        """Find every grid table in article.md and ask Claude to rebuild
+        it as a clean Markdown pipe table. The original article.md is
+        snapshotted to .versions/ first so you can roll back if Claude's
+        reconstruction misbehaves.
+        """
+        import llm_cleanup
+        if not llm_cleanup.available():
+            flash(
+                "Claude API unavailable. Set ANTHROPIC_API_KEY and "
+                "`pip install anthropic`.",
+                "error",
+            )
+            return redirect(url_for("article_home", article_id=article_id))
+        article = db.query_one("SELECT project_path FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        apath = Path(article["project_path"])
+        md_path = apath / "article.md"
+        if not md_path.exists():
+            flash("No article.md to scan for tables.", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+
+        text = md_path.read_text(encoding="utf-8")
+        # Find each grid table: a block starting with a `+---+`-style
+        # separator and ending at the next blank line or end of run of
+        # `|`/`+` lines.
+        lines = text.split("\n")
+        out_lines: list[str] = []
+        i = 0
+        n_repaired = 0
+        n_failed = 0
+        while i < len(lines):
+            line = lines[i]
+            if line.lstrip().startswith("+") and "---" in line:
+                # Collect until we leave the table block.
+                start = i
+                while i < len(lines) and (
+                    lines[i].lstrip().startswith("+")
+                    or lines[i].lstrip().startswith("|")
+                    or not lines[i].strip()  # allow blank lines mid-table
+                ):
+                    # Stop at a true blank-line gap (two blank lines in a row).
+                    if not lines[i].strip() and i + 1 < len(lines) and not lines[i + 1].strip():
+                        break
+                    i += 1
+                end = i
+                table_block = "\n".join(lines[start:end]).rstrip()
+                # Bound the size we send to Claude (keep cost predictable).
+                if 50 <= len(table_block) <= 12000:
+                    # Provide ~400 chars of context on each side for the prompt.
+                    before_ctx = "\n".join(lines[max(0, start - 6):start])[-400:]
+                    after_ctx = "\n".join(lines[end:end + 6])[:400]
+                    try:
+                        repaired = llm_cleanup.repair_mangled_table(
+                            table_block, context=before_ctx + "\n\n" + after_ctx,
+                        )
+                    except Exception as exc:
+                        flash(f"Claude API error on table at line {start}: {exc}", "warning")
+                        repaired = None
+                    if repaired:
+                        out_lines.append("")
+                        out_lines.append(repaired)
+                        out_lines.append("")
+                        n_repaired += 1
+                        continue
+                    else:
+                        n_failed += 1
+                # Fallback: keep the original table block.
+                out_lines.extend(lines[start:end])
+                continue
+            out_lines.append(line)
+            i += 1
+
+        if n_repaired > 0:
+            conversion._snapshot_version(apath)
+            md_path.write_text("\n".join(out_lines), encoding="utf-8")
+            flash(
+                f"Repaired {n_repaired} table(s) with Claude. "
+                f"{'(' + str(n_failed) + ' failed and kept original.) ' if n_failed else ''}"
+                "Original snapshotted to .versions/. Re-render to apply.",
+                "success",
+            )
+        else:
+            flash(
+                "No tables successfully repaired. "
+                "Either there were no grid tables to repair, "
+                "or Claude declined to reconstruct them.",
+                "warning",
+            )
+        return redirect(url_for("article_home", article_id=article_id))
+
+    @app.route("/articles/<int:article_id>/llm-alt-text", methods=["POST"])
+    @login_required
+    def article_llm_alt_text(article_id):
+        """Generate alt text for any image without one via Claude vision."""
+        import llm_cleanup
+        if not llm_cleanup.available():
+            flash(
+                "Claude API unavailable. Set ANTHROPIC_API_KEY and "
+                "`pip install anthropic`.",
+                "error",
+            )
+            return redirect(url_for("article_home", article_id=article_id))
+        article = db.query_one("SELECT project_path FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        apath = Path(article["project_path"])
+        md_path = apath / "article.md"
+        if not md_path.exists():
+            flash("No article.md to scan for images.", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+        # Find each `![](path)` reference in the article and check if
+        # the alt text is empty. If so, generate one and rewrite.
+        text = md_path.read_text(encoding="utf-8")
+        pattern = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
+        n_generated = 0
+        new_chunks: list[str] = []
+        cursor = 0
+        for m in pattern.finditer(text):
+            new_chunks.append(text[cursor:m.start()])
+            alt, src = m.group(1), m.group(2)
+            if not alt.strip() and not src.startswith("http"):
+                img_path = apath / src
+                if img_path.exists():
+                    surrounding = text[max(0, m.start()-400):m.end()+400]
+                    try:
+                        alt_text = llm_cleanup.generate_alt_text(img_path, surrounding)
+                    except Exception as exc:
+                        alt_text = None
+                        flash(f"Claude API error on {src}: {exc}", "warning")
+                    if alt_text:
+                        new_chunks.append(f"![{alt_text}]({src})")
+                        n_generated += 1
+                        cursor = m.end()
+                        continue
+            new_chunks.append(m.group(0))
+            cursor = m.end()
+        new_chunks.append(text[cursor:])
+        if n_generated:
+            md_path.write_text("".join(new_chunks), encoding="utf-8")
+            flash(f"Generated {n_generated} alt-text description(s). Re-render to apply.", "success")
+        else:
+            flash("No images needed alt text (all already have descriptions).", "success")
+        return redirect(url_for("article_home", article_id=article_id))
+
+    @app.route("/articles/<int:article_id>/ocr-images", methods=["POST"])
+    @login_required
+    def article_ocr_images(article_id):
+        """Run Tesseract OCR on all images in the article and dump the
+        recognized text to ocr-results.txt for the editor to inspect."""
+        import ocr as ocr_mod
+        if not ocr_mod.available():
+            flash(
+                "Tesseract OCR unavailable. Install the tesseract CLI "
+                "(see https://github.com/UB-Mannheim/tesseract/wiki) and "
+                "`pip install pytesseract Pillow`.",
+                "error",
+            )
+            return redirect(url_for("article_home", article_id=article_id))
+        article = db.query_one("SELECT project_path FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        apath = Path(article["project_path"])
+        assets = apath / "assets"
+        if not assets.exists():
+            flash("No assets/ directory to scan for images.", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+        out_lines: list[str] = []
+        n_processed = 0
+        for img in assets.rglob("*"):
+            if img.is_file() and img.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".tiff", ".tif", ".bmp", ".webp"}:
+                out_lines.append(f"=== {img.relative_to(apath)} ===\n")
+                text = ocr_mod.ocr_image(img)
+                if text:
+                    out_lines.append(text.strip())
+                    out_lines.append("\n\n")
+                    n_processed += 1
+        if n_processed:
+            (apath / "ocr-results.txt").write_text("\n".join(out_lines), encoding="utf-8")
+            flash(
+                f"OCR'd {n_processed} image(s). Results in ocr-results.txt; "
+                "copy any tables from there into article.md as Markdown.",
+                "success",
+            )
+        else:
+            flash("No OCR-able images found in assets/.", "warning")
+        return redirect(url_for("article_home", article_id=article_id))
+
+    @app.route("/articles/<int:article_id>/snapshots")
+    @login_required
+    def article_snapshots(article_id):
+        """List article.md snapshots with a diff link for each."""
+        article = db.query_one("SELECT * FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        apath = Path(article["project_path"])
+        versions_dir = apath / ".versions"
+        snapshots = []
+        if versions_dir.exists():
+            for p in sorted(versions_dir.glob("article-*.md"), reverse=True):
+                snapshots.append({
+                    "name": p.name,
+                    "size": p.stat().st_size,
+                    "mtime": p.stat().st_mtime,
+                })
+        return render_template(
+            "snapshots.html", article=article, snapshots=snapshots,
+        )
+
+    @app.route("/articles/<int:article_id>/diff/<snapshot>")
+    @login_required
+    def article_diff(article_id, snapshot):
+        """Show a unified diff between a snapshot and the current article.md."""
+        import difflib
+        article = db.query_one("SELECT * FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        apath = Path(article["project_path"])
+        snapshot = secure_filename(snapshot)
+        snap_path = apath / ".versions" / snapshot
+        cur_path = apath / "article.md"
+        if not snap_path.exists() or not cur_path.exists():
+            abort(404)
+        snap_text = snap_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        cur_text = cur_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        diff_lines = list(difflib.unified_diff(
+            snap_text, cur_text,
+            fromfile=f"snapshot: {snapshot}",
+            tofile="current: article.md",
+            n=3,
+        ))
+        return render_template(
+            "diff.html", article=article, snapshot=snapshot, diff_lines=diff_lines,
+        )
+
+    @app.route("/articles/<int:article_id>/reclean", methods=["POST"])
+    @login_required
+    def article_reclean(article_id):
+        """Regenerate article.md from article-raw.md by re-running the
+        cleanups pipeline. Useful when the WYSIWYG editor (which doesn't
+        support grid tables) has mangled an article's table structure
+        on save, or when cleanup logic has been updated since the
+        article was first ingested. Preserves the existing YAML front
+        matter so metadata edits aren't lost."""
+        article = db.query_one(
+            "SELECT * FROM articles WHERE id = ?", (article_id,),
+        )
+        if not article:
+            abort(404)
+        apath = Path(article["project_path"])
+        raw_path = apath / "article-raw.md"
+        md_path = apath / "article.md"
+        if not raw_path.exists():
+            flash(
+                "No article-raw.md available to re-clean from. This article "
+                "may pre-date raw snapshotting; edit article.md by hand.",
+                "error",
+            )
+            return redirect(url_for("article_home", article_id=article_id))
+
+        # Preserve current YAML front matter so user's metadata edits
+        # survive the re-clean.
+        import yaml as _yaml
+        fm, _existing_body = conversion.read_article_metadata(apath)
+        # Snapshot current article.md before overwriting.
+        try:
+            conversion._snapshot_version(apath)
+        except Exception:
+            pass
+        try:
+            conversion.run_cleanups(apath, issue_metadata=None)
+            # run_cleanups writes article.md from article-raw.md, blowing
+            # away the existing YAML. Re-apply the saved metadata.
+            if fm:
+                conversion.write_article_metadata(apath, fm)
+        except Exception as exc:
+            flash(f"Re-clean failed: {exc}", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+        flash(
+            "Re-cleaned article.md from article-raw.md. Render to see results.",
+            "success",
+        )
+        return redirect(url_for("article_home", article_id=article_id))
+
+    @app.route("/articles/<int:article_id>/ojs-package")
+    @login_required
+    def article_ojs_package(article_id):
+        """Bundle the rendered HTML galley + its assets into a ZIP for
+        OJS upload. OJS's galley submission flow wants the HTML file
+        and image files uploaded separately, but the editor can upload
+        a single ZIP that OJS will unpack. Includes article.html,
+        article.css, and the assets/ directory.
+        """
+        import zipfile
+        import io
+        article = db.query_one(
+            "SELECT a.*, j.slug AS journal_slug FROM articles a "
+            "JOIN journals j ON a.journal_id = j.id WHERE a.id = ?",
+            (article_id,),
+        )
+        if not article:
+            abort(404)
+        apath = Path(article["project_path"])
+        html_path = apath / "article.html"
+        if not html_path.exists():
+            flash(
+                "No rendered HTML to package. Click Render first.",
+                "error",
+            )
+            return redirect(url_for("article_home", article_id=article_id))
+
+        # Resolve the journal's CSS (or per-article override if present).
+        css_paths: list[Path] = []
+        tpl = conversion.template_dir(article["journal_slug"])
+        if (tpl / "article.css").exists():
+            css_paths.append(tpl / "article.css")
+        if (apath / "article-override.css").exists():
+            css_paths.append(apath / "article-override.css")
+
+        slug = article["slug"]
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            # HTML at the root, named after the article slug.
+            z.write(html_path, arcname=f"{slug}.html")
+            # CSS files alongside.
+            for css in css_paths:
+                z.write(css, arcname=css.name)
+            # All assets recursively.
+            assets_dir = apath / "assets"
+            if assets_dir.exists():
+                for f in assets_dir.rglob("*"):
+                    if f.is_file():
+                        rel = f.relative_to(apath)
+                        z.write(f, arcname=str(rel).replace("\\", "/"))
+        buf.seek(0)
+        from flask import Response
+        return Response(
+            buf.getvalue(),
+            mimetype="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{slug}-ojs.zip"',
+            },
+        )
+
+    @app.route("/articles/<int:article_id>/delete", methods=["POST"])
+    @login_required
+    def article_delete(article_id):
+        """Delete an article. Removes the DB row AND the on-disk
+        directory at project_path. Irreversible — the dashboard's
+        delete button uses a JavaScript confirm to gate this.
+        """
+        import shutil
+        article = db.query_one(
+            "SELECT id, title, project_path, issue_id FROM articles WHERE id = ?",
+            (article_id,),
+        )
+        if not article:
+            abort(404)
+        # Filesystem cleanup first (so if it fails, the DB row remains
+        # as a pointer for retry). Use missing_ok semantics: if the dir
+        # is already gone, that's fine.
+        apath = Path(article["project_path"])
+        try:
+            if apath.exists() and apath.is_dir():
+                shutil.rmtree(apath)
+        except Exception as exc:
+            flash(f"Filesystem cleanup failed: {exc}", "error")
+            return redirect(url_for("dashboard"))
+        # Cascade-clean DB references. Foreign keys may already CASCADE
+        # for conversions etc., but be defensive about anything that
+        # references this article id.
+        db.execute("DELETE FROM conversions WHERE article_id = ?", (article_id,))
+        db.execute("DELETE FROM articles WHERE id = ?", (article_id,))
+        flash(f"Deleted {article['title']!r}.", "success")
+        # Redirect back to wherever the user was — if the article had an
+        # issue, the issue page is the natural landing spot; otherwise
+        # the dashboard.
+        if article["issue_id"]:
+            return redirect(url_for("issue_home", issue_id=article["issue_id"]))
+        return redirect(url_for("dashboard"))
+
+    @app.route("/articles/<int:article_id>/upload-missing-assets", methods=["POST"])
+    @login_required
+    def article_upload_missing_assets(article_id):
+        """Upload one or more asset files for an article whose Markdown
+        references images that aren't on disk. Each uploaded file is
+        placed at the path the Markdown expects — i.e., if the article
+        references `assets/media/foo.png`, the upload form names that
+        file as the target and we write it there exactly.
+
+        Also auto-detects extension mismatches: if the uploaded file's
+        actual format doesn't match the target extension (e.g., a JPEG
+        renamed to .png — common when Pandoc extracts media from DOCX
+        and uses content hashes for filenames), the file is saved at
+        the corrected extension AND article.md is rewritten to point
+        at the corrected reference. Without this, Typst would fail
+        with 'Invalid PNG signature' on perfectly valid JPEG content.
+
+        This solves the .md-upload case where the editor brought in a
+        Markdown file with image references but didn't bring the
+        images themselves.
+        """
+        article = db.query_one("SELECT project_path FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        apath = Path(article["project_path"])
+        md_path = apath / "article.md"
+        md_text = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
+
+        # Magic-byte -> canonical extension map.
+        def detect_ext(head: bytes) -> Optional[str]:
+            if head.startswith(b"\x89PNG\r\n\x1a\n"):
+                return ".png"
+            if head[:3] == b"\xff\xd8\xff":
+                return ".jpg"
+            if head[:6] in (b"GIF87a", b"GIF89a"):
+                return ".gif"
+            if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+                return ".webp"
+            if head[:4] == b"%PDF":
+                return ".pdf"
+            if head[:2] == b"BM":
+                return ".bmp"
+            if head[:4] in (b"II*\x00", b"MM\x00*"):
+                return ".tif"
+            if head[:5] == b"<?xml" or head[:4] == b"<svg":
+                return ".svg"
+            return None
+
+        n_saved = 0
+        n_renamed = 0
+        for key, fileobj in request.files.items(multi=True):
+            if not fileobj or not fileobj.filename:
+                continue
+            # `key` carries the target path the markdown expects.
+            target_rel = key.strip("/").strip("\\")
+            target = (apath / target_rel).resolve()
+            try:
+                target.relative_to(apath.resolve())
+            except ValueError:
+                flash(f"Refused upload of {target_rel!r}: path escapes article directory.", "error")
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            fileobj.save(target)
+            n_saved += 1
+
+            # Sniff the first 16 bytes to confirm the extension matches
+            # the file's actual format. If not, rename + rewrite MD.
+            head = target.read_bytes()[:16]
+            actual_ext = detect_ext(head)
+            current_ext = target.suffix.lower()
+            if actual_ext and actual_ext != current_ext:
+                # Special-case: .jpeg vs .jpg are the same content.
+                if not (actual_ext == ".jpg" and current_ext in (".jpg", ".jpeg")):
+                    new_target = target.with_suffix(actual_ext)
+                    target.rename(new_target)
+                    # Rewrite the markdown reference from old ext to new.
+                    new_rel = (Path(target_rel).with_suffix(actual_ext)).as_posix()
+                    md_text = md_text.replace(target_rel, new_rel)
+                    n_renamed += 1
+                    flash(
+                        f"Detected format mismatch on {target_rel!r}: "
+                        f"file is actually {actual_ext[1:].upper()}, not "
+                        f"{current_ext[1:].upper() if current_ext else 'unknown'}. "
+                        f"Saved as {new_rel} and updated article.md.",
+                        "warning",
+                    )
+
+        if n_renamed and md_path.exists():
+            md_path.write_text(md_text, encoding="utf-8")
+        if n_saved:
+            flash(f"Saved {n_saved} asset file(s). Re-render to use them.", "success")
+        else:
+            flash("No files uploaded.", "warning")
+        return redirect(url_for("article_home", article_id=article_id))
+
+    @app.route("/articles/<int:article_id>/upload-asset", methods=["POST"])
+    @login_required
+    def article_upload_asset(article_id):
+        """Upload an image (or other asset) to the article's assets/
+        directory and return JSON with a relative path the editor can
+        insert as Markdown. Used by both the WYSIWYG and Markdown editor
+        toolbars."""
+        from flask import jsonify
+        article = db.query_one(
+            "SELECT * FROM articles WHERE id = ?", (article_id,),
+        )
+        if not article:
+            return jsonify({"ok": False, "error": "Article not found."}), 404
+        f = request.files.get("asset")
+        if not f or not f.filename:
+            return jsonify({"ok": False, "error": "No file uploaded."}), 400
+        # Accept the common image types Pandoc/Typst can embed.
+        allowed = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf", ".tiff", ".tif"}
+        ext = Path(f.filename).suffix.lower()
+        if ext not in allowed:
+            return jsonify({
+                "ok": False,
+                "error": f"Unsupported asset type '{ext}'. Allowed: {', '.join(sorted(allowed))}.",
+            }), 400
+        assets_dir = Path(article["project_path"]) / "assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        fname = secure_filename(f.filename) or f"asset{ext}"
+        # If the name collides, suffix -1, -2, etc., so we never silently
+        # overwrite a previous upload.
+        target = assets_dir / fname
+        if target.exists():
+            stem = target.stem
+            n = 1
+            while True:
+                candidate = assets_dir / f"{stem}-{n}{ext}"
+                if not candidate.exists():
+                    target = candidate
+                    break
+                n += 1
+        f.save(target)
+        rel = f"assets/{target.name}"
+        # Default alt text is just the stem with hyphens turned to spaces;
+        # editor can refine it after insert.
+        alt = target.stem.replace("-", " ").replace("_", " ")
+        return jsonify({
+            "ok": True,
+            "filename": target.name,
+            "path": rel,
+            "markdown": f"![{alt}]({rel})",
+            "bytes": target.stat().st_size,
+        })
+
     @app.route("/articles/<int:article_id>/lint")
     @login_required
     def article_lint(article_id):
@@ -1079,6 +2048,7 @@ def register_routes(app: Flask):
         ("11-developers", "For Developers"),
         ("12-installation", "Installation"),
         ("13-customization", "Adding a new journal"),
+        ("14-advanced-tools", "Advanced Tools"),
     ]
 
     @app.route("/help")
@@ -1110,6 +2080,52 @@ def register_routes(app: Flask):
             current_slug=slug,
             current_title=current_title,
             html=html,
+        )
+
+    # ---------- bib builder ----------
+
+    @app.route("/bib-builder", methods=["GET", "POST"])
+    @login_required
+    def bib_builder_page():
+        """Heuristic prose → BibTeX tool. GET renders the form; POST takes
+        the pasted prose + style choice and returns the generated BibTeX
+        in the same page so the user can review, copy, and download."""
+        import bib_builder
+        prose = ""
+        style = "mla"
+        bibtex = ""
+        entry_count = 0
+        if request.method == "POST":
+            prose = request.form.get("prose", "")
+            style = request.form.get("style", "mla")
+            if prose.strip():
+                entries = bib_builder.parse_entries(prose, style=style)
+                bibtex = bib_builder.to_bibtex(entries)
+                entry_count = len(entries)
+        return render_template(
+            "bib_builder.html",
+            prose=prose,
+            style=style,
+            bibtex=bibtex,
+            entry_count=entry_count,
+        )
+
+    @app.route("/bib-builder/download", methods=["POST"])
+    @login_required
+    def bib_builder_download():
+        import bib_builder
+        from flask import Response
+        prose = request.form.get("prose", "")
+        style = request.form.get("style", "mla")
+        if not prose.strip():
+            flash("Paste a Works Cited list first.", "error")
+            return redirect(url_for("bib_builder_page"))
+        entries = bib_builder.parse_entries(prose, style=style)
+        bibtex = bib_builder.to_bibtex(entries)
+        return Response(
+            bibtex,
+            mimetype="application/x-bibtex",
+            headers={"Content-Disposition": 'attachment; filename="references.bib"'},
         )
 
     @app.route("/healthz")

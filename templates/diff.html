@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Diff: {{ snapshot }} | {{ article['title'] }}{% endblock %}
+{% block content %}
+<nav class="crumbs">
+  <a href="{{ url_for('article_home', article_id=article['id']) }}">{{ article['slug'] }}</a>
+  <span class="sep">›</span>
+  <a href="{{ url_for('article_snapshots', article_id=article['id']) }}">Snapshots</a>
+  <span class="sep">›</span>
+  <span>{{ snapshot }}</span>
+</nav>
+<section class="card">
+  <h1 style="margin-top:0;">Diff: <code>{{ snapshot }}</code> → current</h1>
+  <p class="dim">
+    Lines starting with <code>-</code> are in the snapshot but absent from the current article; lines with <code>+</code> are present now but absent in the snapshot. <code>@@</code> headers mark hunk locations.
+  </p>
+  {% if not diff_lines %}
+  <p class="dim">No differences — the snapshot is identical to the current article.md.</p>
+  {% else %}
+  <pre class="diff">{% for line in diff_lines -%}
+{% if line.startswith('+') and not line.startswith('+++') %}<span class="add">{{ line | e }}</span>{% elif line.startswith('-') and not line.startswith('---') %}<span class="del">{{ line | e }}</span>{% elif line.startswith('@@') %}<span class="hunk">{{ line | e }}</span>{% else %}{{ line | e }}{% endif %}{%- endfor %}</pre>
+  {% endif %}
+</section>
+{% endblock %}

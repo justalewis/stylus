@@ -4,30 +4,41 @@ Each article is a directory of files under a journal. Here's what you do with on
 
 ## Uploading
 
-From a journal page, click **Upload DOCX**. The form takes:
+From a journal page, click **Upload article**. The form takes:
 
-- The `.docx` file (required)
+- **Source file** — `.docx` (Word), `.md`, or `.markdown`. Required.
 - Optional slug (auto-derived from the filename if blank). The slug becomes the article's directory name and must be unique per journal.
 - Optional title hint (overridden by the docx's Title-styled paragraph if present).
 - **Short title** and **short authors** (required) — these become the running headers in the PDF.
 - Tracked changes: accept or reject (accept is the default).
+- **Ingest engine** (radio button): *Pandoc* (default) vs. *Mammoth*. Mammoth is offered if installed and often handles text-box-heavy DOCX better than Pandoc.
+- **Round-trip through LibreOffice** (checkbox): if LibreOffice is on PATH, open + re-save the DOCX before ingest to flatten text boxes and clean autoformat junk.
 
 What happens on submit:
 
-1. The docx is copied into the article directory as `source.docx`.
-2. Pandoc converts it to Markdown, extracting embedded media into `assets/`.
-3. python-docx reads the docx Title style separately (Pandoc doesn't preserve it).
-4. The cleanup pipeline runs: strip Word highlight/underline wrappers, normalize dashes/quotes, extract the preamble into YAML front matter.
-5. The result is `article.md`, the canonical source from this point forward.
+1. The source is copied into the article directory as `source.docx` (or saved as `article-raw.md` for direct Markdown uploads).
+2. If `.docx`: Pandoc (or Mammoth) converts it to Markdown, extracting embedded media into `assets/`.
+3. python-docx scans the source and flashes warnings about text boxes, merged-cell tables, nested tables, missing alt text, or tracked changes left in the document.
+4. python-docx reads the docx Title style separately (Pandoc doesn't preserve it).
+5. The cleanup pipeline runs: strip Word highlight/underline wrappers, normalize dashes/quotes, repair Pandoc Div-style footnotes, split collapsed grid tables, convert single-cell callout tables to blockquotes, extract preamble into YAML front matter.
+6. The result is `article.md`, the canonical source from this point forward.
 
 ## The article home page
 
-You'll see:
+The redesigned article page has four top-level zones:
 
-- Title and status badge.
-- An action row: **Edit metadata** · Edit (WYSIWYG) · Edit Markdown · Run lint · Render · View HTML · View PDF · Download EPUB · Download JATS XML · Download CrossRef XML.
-- A **Bibliography (BibTeX)** drop-target to upload `references.bib`.
-- The conversion log, a timestamped trace of every stage and save that's run.
+1. **Breadcrumb** — Dashboard › journal › issue (if assigned) › article slug.
+2. **Status strip** — at-a-glance state: last rendered time, sections / images / tables / words counts, missing-image flag, bibliography chip, CSS override chip.
+3. **Action grid** — four labeled clusters:
+   - **Edit ▾** dropdown: Metadata / Rich (TinyMCE) / Lite (ProseMirror) / Markdown.
+   - **Render** — big primary button, keyboard shortcut `R`. Subtitle: `→ HTML · PDF · EPUB`.
+   - **Outputs** — appears once rendered: View HTML, View PDF, **Download ▾** dropdown grouped *For readers* / *For indexers* / *For OJS submission*.
+   - **Tools** — Run lint + **Advanced ▾** dropdown: alternate render engines, validators, OCR, AI assist.
+4. **Tabs**: Overview · Preview · Logs · Settings (keyboard shortcuts `1`-`4`).
+   - *Overview* shows recent activity and snapshot count.
+   - *Preview* embeds the rendered HTML in an iframe.
+   - *Logs* contains the full conversion log.
+   - *Settings* holds Bibliography (BibTeX) upload, per-article CSS override, and the **Danger zone** (Re-clean from source, Delete article).
 
 ## Editing metadata
 
@@ -45,9 +56,11 @@ A safety net: scalar fields (title, subtitle, short-title, short-authors, footer
 
 ## Editing the body
 
-Two editors, same backing file:
+Three editor options, all backed by the same `article.md`:
 
-- **WYSIWYG (ProseMirror).** Better for non-technical editors. Toolbar: bold, italic, code, link, H1–H3, paragraph, bulleted/numbered lists, blockquote, undo/redo. Keyboard shortcuts (Ctrl+B, Ctrl+I, Ctrl+S). Serializes back to Markdown on save.
+- **Rich (TinyMCE).** Full Word-like toolbar with tables (real cell-level editing), color picker, font controls, alignment, lists, images, find/replace, source view. Recommended for table-heavy articles or editors who prefer Word-style UI. Round-trip note: TinyMCE works in HTML; on save we convert HTML → Markdown via Pandoc with `grid_tables` enabled, so multi-paragraph cells and tables survive. The paste handler strips Microsoft Office `mso-*` style cruft automatically.
+- **Lite (ProseMirror).** Lightweight, fast-loading WYSIWYG. Toolbar: bold, italic, code, link, H1–H3, paragraph, bulleted/numbered lists, blockquote, image upload, undo/redo. Best for plain prose; **warning**: does not support grid tables — opens and saves of articles with tables will mangle them. The Edit menu surfaces a warning chip (⚠) if the current article contains tables.
+- **Markdown (CodeMirror).** Split-pane source editor with synced live preview. Bidirectional scroll-sync between source and preview, click-in-preview to jump cursor to the corresponding line. Toggle sync with `Ctrl+Shift+L`. Best for power users who want full source control. Insert image button on the toolbar uploads to `assets/` and inserts at cursor.
 - **Markdown (CodeMirror).** Better for power users who want raw control. Live preview pane on the right.
 
 Each save snapshots the previous `article.md` into `.versions/article-{timestamp}.md` (last 5 kept).

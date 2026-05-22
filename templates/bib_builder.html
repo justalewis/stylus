@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Bib Builder | Graphion{% endblock %}
+{% block head %}
+<style>
+  .bib-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-4);
+  }
+  @media (max-width: 900px) {
+    .bib-grid { grid-template-columns: 1fr; }
+  }
+  .bib-grid textarea {
+    width: 100%;
+    min-height: 50vh;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    line-height: 1.45;
+    padding: var(--space-3);
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-sm);
+    color: var(--ink);
+    resize: vertical;
+  }
+  .bib-grid textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .bib-output { position: relative; }
+  .bib-output pre {
+    margin: 0;
+    background: var(--surface-paper-soft, var(--paper));
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    line-height: 1.45;
+    overflow: auto;
+    min-height: 50vh;
+    max-height: 60vh;
+    white-space: pre;
+  }
+  .bib-copy-btn {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+  }
+  .bib-row {
+    display: flex;
+    gap: var(--space-3);
+    align-items: center;
+    margin-bottom: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .bib-row label { font-size: var(--text-sm); color: var(--muted); }
+  .bib-row select { padding: var(--space-2); font-family: var(--font-body); }
+</style>
+{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Bib Builder</h1>
+  <p class="dim">
+    Paste a prose Works Cited list (MLA, APA, or Chicago notes-bibliography).
+    Graphion makes a best-effort BibTeX file from it — author, year, title,
+    container, volume / issue, pages, DOI, URL. Output is meant to be
+    reviewed; correct anything the heuristics misread before saving to an
+    article. This tool does not contact the network.
+  </p>
+
+  <form method="post" action="{{ url_for('bib_builder_page') }}" class="stack">
+    <div class="bib-row">
+      <label for="style">Source style:</label>
+      <select name="style" id="style">
+        <option value="mla"     {% if style == 'mla'     %}selected{% endif %}>MLA</option>
+        <option value="apa"     {% if style == 'apa'     %}selected{% endif %}>APA</option>
+        <option value="chicago" {% if style == 'chicago' %}selected{% endif %}>Chicago</option>
+      </select>
+      <button class="button" type="submit">Build BibTeX</button>
+      <button class="button ghost" type="submit"
+              formaction="{{ url_for('bib_builder_download') }}">Build &amp; download .bib</button>
+      {% if entry_count %}
+      <span class="dim">Parsed {{ entry_count }} entr{{ 'y' if entry_count == 1 else 'ies' }}.</span>
+      {% endif %}
+    </div>
+
+    <div class="bib-grid">
+      <div>
+        <label for="prose" class="dim" style="display:block; margin-bottom: var(--space-2);">
+          Prose Works Cited
+        </label>
+        <textarea name="prose" id="prose" placeholder="Paste your prose Works Cited list here. One entry per paragraph; blank lines between entries are fine.">{{ prose }}</textarea>
+      </div>
+      <div class="bib-output">
+        <label for="bibtex" class="dim" style="display:block; margin-bottom: var(--space-2);">
+          Generated BibTeX
+        </label>
+        {% if bibtex %}
+        <button class="button ghost small bib-copy-btn" type="button" id="copy-bib-btn">Copy</button>
+        <pre id="bibtex-output">{{ bibtex }}</pre>
+        {% else %}
+        <pre class="dim">Output will appear here. Click <strong>Build BibTeX</strong> after pasting your list.</pre>
+        {% endif %}
+      </div>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Tips for cleaner output</h2>
+  <ul>
+    <li>One entry per paragraph. Blank lines between entries help, but the
+      parser will also split on lines that begin with a capitalized surname
+      + comma.</li>
+    <li>Italic <em>book or journal</em> titles in your source come through
+      best when they survive the paste — Word and Google Docs both export
+      asterisks if you paste as Markdown. If your source is plain text,
+      wrap titles in <code>*asterisks*</code> by hand for accuracy.</li>
+    <li>For MLA repeat-author entries (<code>---.</code>), the parser
+      carries the previous entry's authors forward automatically.</li>
+    <li>Anything the parser couldn't classify drops into the entry's
+      <code>note</code> field so the citation isn't lost.</li>
+    <li>The output is a starting point — give it a quick read before using
+      it. Pandoc will surface any BibTeX syntax errors on the next render.</li>
+  </ul>
+</section>
+
+{% if bibtex %}
+<script>
+  const copyBtn = document.getElementById('copy-bib-btn');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', async () => {
+      const text = document.getElementById('bibtex-output').textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1800);
+      } catch (e) {
+        copyBtn.textContent = 'Press Ctrl+C';
+      }
+    });
+  }
+</script>
+{% endif %}
+{% endblock %}

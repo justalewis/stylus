@@ -37,10 +37,16 @@
   h(0.05em)
 }
 
+// Title uses Typst content syntax ([...]) so quoted titles like
+// `"Facing the World" through Translingual...` don't blow up the Typst
+// parser. Author and keywords have to be string arrays per Typst's
+// document spec; we leave sentinels here and substitute them from
+// Python after Pandoc emits the file, with proper backslash-escaping
+// for embedded quotes.
 #set document(
-  $if(title)$title: "$title$",$endif$
-  $if(author)$author: ($for(author)$"$author.name$"$sep$, $endfor$),$endif$
-  $if(keywords)$keywords: ($for(keywords)$"$keywords$"$sep$, $endfor$),$endif$
+  $if(title)$title: [$title$],$endif$
+  author: (GRAPHION_AUTHORS_PLACEHOLDER),
+  keywords: (GRAPHION_KEYWORDS_PLACEHOLDER),
 )
 
 #set page(
@@ -133,6 +139,35 @@
   v(0.6em)
 }
 
+// Tables. Classical book treatment:
+//   - Hairline rule above and below the entire table (1pt, ink color).
+//   - No vertical borders (x: 0pt) — keeps the page airy.
+//   - Light horizontal grid line between rows (0.5pt, rule color).
+//   - Cells get reasonable padding so columns aren't cramped.
+// Single-cell tables (the "rectangle" / callout-box shape that DOCX
+// emits for text boxes) get just the top and bottom rules with no
+// internal grid, so they read as a clean horizontal band rather than
+// floating text. Multi-cell rectangles ("Canvas Discuss" boxes etc.)
+// likewise get a top + bottom rule.
+#set table(
+  inset: 8pt,
+  stroke: (
+    top:    1pt   + ink,
+    bottom: 1pt   + ink,
+    left:   0pt,
+    right:  0pt,
+    x:      0pt,
+    y:      0.5pt + rule-color,
+  ),
+)
+#show table: it => {
+  set text(size: 9.5pt)
+  set par(first-line-indent: 0pt, leading: 0.55em, justify: false)
+  v(0.4em)
+  it
+  v(0.4em)
+}
+
 // Links: subtle, ink color (no underline noise in print)
 #show link: it => text(fill: rgb("#5a3a1f"), it)
 
@@ -176,7 +211,15 @@ $if(abstract)$
 #v(1em)
 $endif$
 
-#pagebreak()
+// Horizontal rule between front matter (title, authors, keywords,
+// abstract) and the article body. Matches the LiCS print layout:
+// the body starts on the same page as the metadata, separated only
+// by a hairline rule. We do NOT pagebreak here — that would push the
+// body to page 2 unnecessarily and break the journal's expected
+// "opening rule + drop cap + body" visual pattern.
+#v(0.8em)
+#align(center, line(length: 40%, stroke: 0.5pt + rule-color))
+#v(1.2em)
 
 // ---------- Body ----------
 

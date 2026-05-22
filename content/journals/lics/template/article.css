@@ -271,7 +271,117 @@ sup a {
   line-height: 0;
 }
 
-/* Works cited (hanging indent) */
+/* Tables. Classical book convention: hairline rules above and below
+ * the entire table and below the header row, no vertical borders.
+ * Generous padding inside cells, slightly smaller body text. The
+ * table scrolls horizontally if the viewport is narrower than the
+ * column data demands; this keeps wide pedagogical charts (common in
+ * humanities scholarship) usable on phones without forcing horrible
+ * overflow.
+ *
+ * Pandoc emits `<colgroup>` widths from the source document, so the
+ * column proportions come through automatically. We add `table-layout:
+ * fixed` only when explicit widths are present, falling back to auto
+ * sizing otherwise. */
+table {
+  width: 100%;
+  margin: 1.5rem 0;
+  border-collapse: collapse;
+  border-top: 1.5px solid #4a4137;
+  border-bottom: 1.5px solid #4a4137;
+  font-size: 0.94rem;
+  line-height: 1.5;
+}
+table caption {
+  caption-side: top;
+  text-align: center;
+  font-style: italic;
+  font-size: 0.92rem;
+  color: #4a4137;
+  margin-bottom: 0.5rem;
+}
+thead tr {
+  border-bottom: 1px solid #4a4137;
+}
+th {
+  text-align: left;
+  font-weight: 600;
+  padding: 0.55rem 0.85rem;
+  vertical-align: baseline;
+  font-variant: small-caps;
+  letter-spacing: 0.02em;
+}
+td {
+  padding: 0.55rem 0.85rem;
+  vertical-align: top;
+  text-align: left;
+  hyphens: auto;
+}
+/* Pandoc-from-DOCX tables often lack a <thead>: the visual header
+ * row sits in <tbody> with every cell wrapping a <strong>. Detect that
+ * shape with :has() and dress it like a real header so the chart is
+ * legible. */
+tbody tr:has(> td > strong:only-child) {
+  border-bottom: 1.5px solid #4a4137;
+}
+tbody tr:has(> td > strong:only-child) td {
+  font-variant: small-caps;
+  letter-spacing: 0.02em;
+  padding-bottom: 0.5rem;
+}
+tbody tr:has(> td > strong:only-child) td strong {
+  font-weight: 600;
+}
+/* Subtle row separator inside the body (not a heavy grid). */
+tbody tr + tr {
+  border-top: 1px solid #e5dcc4;
+}
+/* Lists inside table cells should be tight, not push the row to
+ * absurd heights. */
+td ul, td ol {
+  margin: 0.25rem 0;
+  padding-left: 1.25rem;
+}
+td p {
+  margin: 0.3rem 0;
+}
+td p:first-child { margin-top: 0; }
+td p:last-child  { margin-bottom: 0; }
+/* On narrow viewports, wrap the whole table in a horizontal scroller.
+ * The :has() selector applies only when the page actually contains a
+ * table; older browsers fall back to overflow on <table> itself. */
+@media (max-width: 720px) {
+  table { display: block; overflow-x: auto; }
+}
+
+/* Pseudo-heading: standalone bold paragraphs (the common DOCX shape
+ * where the author bolded a section heading instead of using a Heading
+ * 2 style). Give them breathing room above and a slightly larger size
+ * so they read as headings, not random bold prose. Targets `<p>` whose
+ * only child is `<strong>`, which is what Pandoc emits for that case. */
+article p:has(> strong:only-child) {
+  margin-top: 2rem;
+  margin-bottom: 0.6rem;
+  font-size: 1.1rem;
+  text-indent: 0;
+  line-height: 1.35;
+}
+article p:has(> strong:only-child) > strong {
+  font-weight: 600;
+  font-variant-caps: small-caps;
+  letter-spacing: 0.04em;
+  font-family: var(--serif);
+  color: var(--ink);
+}
+
+/* Works cited (hanging indent). Closing rule below the entire list so
+ * there's a visual separator before whatever follows (Notes section,
+ * end of document). */
+section.references {
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 1.5rem;
+  margin-bottom: 0;
+}
 section.references p {
   margin: 0.4rem 0;
   padding-left: 2em;
