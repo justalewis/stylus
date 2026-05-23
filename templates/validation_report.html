@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}{{ kind|title }} report | {{ article['title'] }}{% endblock %}
+{% block head %}
+<style>
+  .report-summary {
+    background: var(--surface-paper-soft, #faf6ee);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-4);
+    font-size: var(--text-sm);
+  }
+  .report-summary .stat { display: inline-block; margin-right: var(--space-4); }
+  .report-summary .stat strong { font-variant-numeric: tabular-nums; }
+  .issue {
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--rule);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-3);
+  }
+  .issue.error   { border-left-color: #c44; }
+  .issue.warning { border-left-color: #d28e2e; }
+  .issue.notice  { border-left-color: var(--accent); }
+  .issue .type {
+    display: inline-block;
+    padding: 0.1em 0.6em;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: var(--surface-sage-soft, #eef0e7);
+  }
+  .issue.error .type   { background: #fde7e0; color: #8a2e2e; }
+  .issue.warning .type { background: #fdf0d8; color: #7a5a16; }
+  .issue.notice .type  { background: var(--surface-sage-soft, #e2efd4); color: var(--accent); }
+  .issue .code { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); margin-left: var(--space-2); }
+  .issue .msg { margin: var(--space-2) 0; }
+  .issue .selector,
+  .issue .context {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    background: var(--surface-paper-soft, #faf6ee);
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    overflow-x: auto;
+    margin: var(--space-1) 0;
+  }
+  .raw-json {
+    background: var(--surface-paper-soft, #faf6ee);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    max-height: 60vh;
+    overflow: auto;
+    white-space: pre-wrap;
+  }
+</style>
+{% endblock %}
+{% block content %}
+<nav class="crumbs">
+  <a href="{{ url_for('article_home', article_id=article['id']) }}">{{ article['slug'] }}</a>
+  <span class="sep">›</span>
+  <span>{{ kind|title }} report</span>
+</nav>
+<section class="card">
+  <h1 style="margin-top:0;">
+    {% if kind == 'verapdf' %}
+      veraPDF — PDF/UA-1 compliance report
+    {% elif kind == 'pa11y' %}
+      pa11y — HTML accessibility audit
+    {% else %}
+      Validation report
+    {% endif %}
+  </h1>
+  <p class="dim">
+    Article: <strong>{{ article['title'] }}</strong> · Saved at <code>{{ report_path }}</code> in the article directory.
+  </p>
+
+  {% if kind == 'pa11y' and report is iterable and report is not string %}
+    {# pa11y report = list of issue dicts #}
+    {% set errors = report | selectattr('type', 'equalto', 'error') | list %}
+    {% set warnings_ = report | selectattr('type', 'equalto', 'warning') | list %}
+    {% set notices = report | selectattr('type', 'equalto', 'notice') | list %}
+    <div class="report-summary">
+      <span class="stat"><strong>{{ report|length }}</strong> total</span>
+      <span class="stat"><strong style="color:#c44;">{{ errors|length }}</strong> error{{ '' if errors|length == 1 else 's' }}</span>
+      <span class="stat"><strong style="color:#d28e2e;">{{ warnings_|length }}</strong> warning{{ '' if warnings_|length == 1 else 's' }}</span>
+      <span class="stat"><strong style="color:var(--accent);">{{ notices|length }}</strong> notice{{ '' if notices|length == 1 else 's' }}</span>
+    </div>
+    {% if report %}
+      {% for issue in report %}
+      <div class="issue {{ issue.type|default('notice') }}">
+        <span class="type">{{ issue.type|default('notice') }}</span>
+        <code class="code">{{ issue.code|default('') }}</code>
+        <p class="msg">{{ issue.message|default('(no message)') }}</p>
+        {% if issue.selector %}
+        <div><span class="dim">Selector:</span> <code class="selector">{{ issue.selector }}</code></div>
+        {% endif %}
+        {% if issue.context %}
+        <div><span class="dim">Context:</span> <pre class="context">{{ issue.context }}</pre></div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="dim">No issues found — clean audit.</p>
+    {% endif %}
+
+  {% elif kind == 'verapdf' %}
+    {# verapdf report = nested dict with `passed` + raw JSON #}
+    <div class="report-summary">
+      {% if report.passed %}
+      <strong style="color:var(--accent);">PDF/UA-1 PASSED</strong> — this PDF meets the accessibility profile.
+      {% else %}
+      <strong style="color:#c44;">PDF/UA-1 FAILED</strong> — see details below. {{ report.error|default('') }}
+      {% endif %}
+    </div>
+    <h2 style="margin-top: var(--space-4);">Raw report</h2>
+    <pre class="raw-json">{{ report | tojson(indent=2) }}</pre>
+
+  {% else %}
+    <pre class="raw-json">{{ report | tojson(indent=2) }}</pre>
+  {% endif %}
+
+  <p class="dim" style="margin-top: var(--space-5);">
+    <a href="{{ url_for('article_home', article_id=article['id']) }}">← Back to article</a>
+  </p>
+</section>
+{% endblock %}

@@ -152,8 +152,17 @@
             {% endif %}
             {% if stats.weasy_pdf_exists %}
             <div class="menu-sep"></div>
-            <a href="{{ url_for('serve_html', article_id=article['id']) }}">article-weasy.pdf (alt)</a>
+            <a href="{{ url_for('serve_weasy_pdf', article_id=article['id']) }}" target="_blank">View WeasyPrint PDF</a>
+            <a href="{{ url_for('serve_weasy_pdf', article_id=article['id']) }}?dl=1">Download WeasyPrint PDF</a>
             {% endif %}
+            {% set verapdf_report = (article['project_path'] ~ '/verapdf-report.json') %}
+            {% set pa11y_report = (article['project_path'] ~ '/pa11y-report.json') %}
+            {% set ocr_results = (article['project_path'] ~ '/ocr-results.txt') %}
+            <div class="menu-sep"></div>
+            <div class="menu-section">Reports</div>
+            <a href="{{ url_for('serve_verapdf_report', article_id=article['id']) }}" target="_blank">PDF/UA report</a>
+            <a href="{{ url_for('serve_pa11y_report', article_id=article['id']) }}" target="_blank">HTML a11y report</a>
+            <a href="{{ url_for('serve_ocr_results', article_id=article['id']) }}" target="_blank">OCR results</a>
           </div>
         </div>
         {% endif %}
@@ -174,33 +183,53 @@
           </button>
           <div class="menu-panel">
             <div class="menu-section">Alternate render</div>
+            {% if weasyprint_ok %}
             <form method="post" action="{{ url_for('article_render_weasy', article_id=article['id']) }}">
-              <button type="submit" {% if not weasyprint_ok %}disabled title="Install WeasyPrint"{% endif %}>Render PDF (WeasyPrint)</button>
+              <button type="submit">Render PDF (WeasyPrint)</button>
             </form>
+            {% else %}
+            <a href="{{ url_for('help_page', slug='14-advanced-tools') }}#weasyprint" class="dim" title="WeasyPrint not installed">Render PDF (WeasyPrint) <em>— install →</em></a>
+            {% endif %}
             <div class="menu-section">Validation</div>
+            {% if verapdf_ok %}
             <form method="post" action="{{ url_for('article_validate_pdf', article_id=article['id']) }}">
-              <button type="submit" {% if not verapdf_ok %}disabled title="Install verapdf"{% endif %}>Validate PDF/UA</button>
+              <button type="submit">Validate PDF/UA</button>
             </form>
+            {% else %}
+            <a href="{{ url_for('help_page', slug='14-advanced-tools') }}#verapdf--pdfua-1-compliance" class="dim" title="verapdf CLI not on PATH">Validate PDF/UA <em>— install →</em></a>
+            {% endif %}
+            {% if pa11y_ok %}
             <form method="post" action="{{ url_for('article_validate_html', article_id=article['id']) }}">
-              <button type="submit" {% if not pa11y_ok %}disabled title="Install pa11y"{% endif %}>Audit HTML accessibility</button>
+              <button type="submit">Audit HTML accessibility</button>
             </form>
+            {% else %}
+            <a href="{{ url_for('help_page', slug='14-advanced-tools') }}#pa11y--html-accessibility-audit" class="dim" title="pa11y not installed">Audit HTML accessibility <em>— install →</em></a>
+            {% endif %}
             <div class="menu-section">AI assist</div>
+            {% if llm_ok %}
             <form method="post" action="{{ url_for('article_stylize', article_id=article['id']) }}"
                   onsubmit="return graphionConfirm('Stylize article (Claude)', 'Apply the journal style guide to the entire article body via Claude. Fixes run-on Works Cited, broken tables, Word HTML cruft, footnote artifacts, quote/dash normalization, and more — in one pass. Original snapshotted first; rollback via Snapshots if needed. Estimated cost: $0.02-$0.05 per article. Continue?', 'Stylize', false);">
-              <button type="submit" {% if not llm_ok %}disabled title="Set ANTHROPIC_API_KEY"{% endif %}><strong>Stylize article ★</strong></button>
+              <button type="submit"><strong>Stylize article ★</strong></button>
             </form>
             <form method="post" action="{{ url_for('article_llm_alt_text', article_id=article['id']) }}"
                   onsubmit="return graphionConfirm('Generate alt text', 'This sends each image without alt text to Claude. Cost: a few cents per article. Continue?', 'Generate', false);">
-              <button type="submit" {% if not llm_ok %}disabled title="Set ANTHROPIC_API_KEY"{% endif %}>Generate alt text</button>
+              <button type="submit">Generate alt text</button>
             </form>
             <form method="post" action="{{ url_for('article_llm_repair_tables', article_id=article['id']) }}"
                   onsubmit="return graphionConfirm('Repair tables only', 'This sends every grid table to Claude for reconstruction as pipe tables. Cost: a few cents per table. Original snapshotted first. (Note: the Stylize button above also handles tables among other fixes.) Continue?', 'Repair', false);">
-              <button type="submit" {% if not llm_ok %}disabled title="Set ANTHROPIC_API_KEY"{% endif %}>Repair tables only</button>
+              <button type="submit">Repair tables only</button>
             </form>
+            {% else %}
+            <a href="{{ url_for('help_page', slug='14-advanced-tools') }}#claude--stylize-article-one-button-editorial-polish" class="dim" title="ANTHROPIC_API_KEY not set or anthropic package not installed">Stylize / alt-text / table repair (Claude) <em>— set up API key →</em></a>
+            {% endif %}
             <div class="menu-section">OCR</div>
+            {% if ocr_ok %}
             <form method="post" action="{{ url_for('article_ocr_images', article_id=article['id']) }}">
-              <button type="submit" {% if not ocr_ok %}disabled title="Install Tesseract"{% endif %}>OCR images</button>
+              <button type="submit">OCR images</button>
             </form>
+            {% else %}
+            <a href="{{ url_for('help_page', slug='14-advanced-tools') }}#tesseract" class="dim" title="Tesseract CLI not on PATH">OCR images (Tesseract) <em>— install →</em></a>
+            {% endif %}
             <div class="menu-sep"></div>
             <a href="{{ url_for('article_snapshots', article_id=article['id']) }}">View snapshots ({{ snapshot_count }})</a>
             {% if not weasyprint_ok and not verapdf_ok and not pa11y_ok and not llm_ok and not ocr_ok %}
@@ -436,7 +465,7 @@
   });
 
   // ---------- Toast ----------
-  function showToast(message, type) {
+  function showToast(message, type, isHtml) {
     type = type || 'info';
     const host = document.getElementById('toast-host');
     const toast = document.createElement('div');
@@ -448,18 +477,30 @@
     close.addEventListener('click', () => toast.remove());
     toast.appendChild(close);
     const span = document.createElement('span');
-    span.textContent = message;
+    if (isHtml) {
+      // Flash messages from server-side validation/render routes may
+      // contain HTML (e.g., `<a href="...">View report →</a>`).
+      span.innerHTML = message;
+    } else {
+      span.textContent = message;
+    }
     toast.appendChild(span);
     host.appendChild(toast);
-    setTimeout(() => { toast.remove(); }, 6000);
+    // Toasts with embedded links stay longer so the user has time to
+    // click them; plain toasts auto-dismiss after 6s.
+    const dismissAfter = isHtml && message.includes('<a ') ? 30000 : 6000;
+    setTimeout(() => { toast.remove(); }, dismissAfter);
   }
-  // Surface Flask flashes as toasts.
+  // Surface Flask flashes as toasts. Server-side flashes may contain
+  // HTML (we use `innerHTML` on the source <li>), so we pass innerHTML
+  // through so embedded links work.
   document.querySelectorAll('.flashes li').forEach(li => {
     let type = 'info';
     if (li.classList.contains('flash-error')) type = 'error';
     else if (li.classList.contains('flash-warning')) type = 'warn';
     else if (li.classList.contains('flash-success')) type = 'success';
-    showToast(li.textContent.trim(), type);
+    // Use innerHTML so embedded <a> tags survive into the toast.
+    showToast(li.innerHTML.trim(), type, true);
     li.style.display = 'none';
   });
 

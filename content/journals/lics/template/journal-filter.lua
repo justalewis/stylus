@@ -29,14 +29,30 @@ local function is_references_heading(header)
       or txt:match("^bibliography") ~= nil
 end
 
+local function _is_notes_text(header)
+  local txt = pandoc.utils.stringify(header):lower()
+  return txt:match("^notes%s*$") ~= nil or txt:match("^endnotes%s*$") ~= nil
+end
+
 function Header(el)
-  -- Tag the references/works-cited heading regardless of level. Some
-  -- articles use `### Works Cited` (H3), others use `# Works Cited`
-  -- (H1) depending on how the source DOCX styled it; either should
-  -- produce a hanging-indent bibliography in the rendered output.
+  -- Tag the references/works-cited heading regardless of source level.
+  -- Some articles use `### Works Cited` (H3) — typed that way by an
+  -- editor or by Claude per the style guide — others use `# Works Cited`
+  -- (H1) depending on how the source DOCX styled it. We PROMOTE all of
+  -- them to level 1 so they pick up the canonical section-heading
+  -- treatment (Didot 13pt centered per the LiCS typography table),
+  -- matching other section headings in the article body. Same for
+  -- explicit Notes / Endnotes headings.
   if is_references_heading(el) then
+    el.level = 1
     el.identifier = "works-cited"
     table.insert(el.classes, "references")
+    return el
+  end
+  if _is_notes_text(el) then
+    el.level = 1
+    el.identifier = "notes-section"
+    table.insert(el.classes, "notes")
     return el
   end
   if el.level == 1 then
@@ -116,19 +132,36 @@ end
 -- indented). HTML output handles the same effect via CSS on
 -- section.references; Typst needs an explicit setting because the
 -- references heading doesn't carry classes through to the body.
+local function is_notes_heading(header)
+  local txt = pandoc.utils.stringify(header):lower()
+  return txt:match("^notes%s*$") ~= nil or txt:match("^endnotes%s*$") ~= nil
+end
+
 local function inject_typst_hanging_indent(blocks)
-  -- Apply hanging-indent treatment after any references-style heading,
-  -- whatever its level. Some articles label Works Cited as H1, others
-  -- as H3 (depends on DOCX styling), and we want the bibliography to
-  -- render correctly in both cases.
+  -- (a) Apply hanging-indent treatment after any references-style
+  -- heading, whatever its level. Some articles label Works Cited as
+  -- H1, others as H3 (depends on DOCX styling), and we want the
+  -- bibliography to render correctly in both cases.
+  -- (b) Start Works Cited and explicit Notes/Endnotes sections on
+  -- their own pages — matches the LiCS print convention.
   local out = {}
   for _, block in ipairs(blocks) do
-    table.insert(out, block)
     if block.t == "Header" and is_references_heading(block) then
+      table.insert(out, pandoc.RawBlock("typst", "#pagebreak()"))
+      table.insert(out, block)
       table.insert(out, pandoc.RawBlock(
         "typst",
         "#set par(first-line-indent: 0pt, hanging-indent: 1.5em)"
       ))
+    elseif block.t == "Header" and is_notes_heading(block) then
+      table.insert(out, pandoc.RawBlock("typst", "#pagebreak()"))
+      table.insert(out, block)
+      table.insert(out, pandoc.RawBlock(
+        "typst",
+        "#set par(first-line-indent: 0pt, hanging-indent: 1.2em, leading: 0.55em)\n#set text(size: 9.5pt)"
+      ))
+    else
+      table.insert(out, block)
     end
   end
   return out
@@ -145,6 +178,22 @@ end
 -- of contents at the document end.
 local collected_notes = {}
 
+local function has_explicit_notes_heading(blocks)
+  -- Detect whether the document already has a "Notes" / "Endnotes"
+  -- heading at any level. If so, our auto-injected one would be a
+  -- duplicate. (Common when an editor — or Claude via Stylize — has
+  -- added an explicit ### Notes section to the markdown.)
+  for _, block in ipairs(blocks) do
+    if block.t == "Header" then
+      local txt = pandoc.utils.stringify(block):lower()
+      if txt:match("^notes%s*$") or txt:match("^endnotes%s*$") then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 local function collect_typst_endnotes(doc)
   -- First pass: walk and rewrite Note inlines.
   local idx = 0
@@ -160,10 +209,62 @@ local function collect_typst_endnotes(doc)
     end,
   })
 
+  -- Helper: build the list of blocks that emit the endnote content
+  -- (numbered superscript marker + content for each note). We do NOT
+  -- emit a #set par here when injecting after an explicit Notes
+  -- heading — inject_typst_hanging_indent runs later in the same
+  -- Pandoc(doc) pass and emits the right par/text settings right
+  -- after the explicit Notes heading, so this helper would just
+  -- duplicate them.
+  local function emit_notes_blocks()
+    local blocks = {}
+    for i, content in ipairs(collected_notes) do
+      local first = content[1]
+      if first and first.t == "Para" then
+        local inlines = pandoc.Inlines({})
+        inlines:insert(pandoc.Superscript(pandoc.Str(tostring(i))))
+        inlines:insert(pandoc.Space())
+        for _, inl in ipairs(first.content) do inlines:insert(inl) end
+        table.insert(blocks, pandoc.Para(inlines))
+        for j = 2, #content do
+          table.insert(blocks, content[j])
+        end
+      else
+        for _, b in ipairs(content) do
+          table.insert(blocks, b)
+        end
+      end
+    end
+    return blocks
+  end
+
+  if #collected_notes > 0 and has_explicit_notes_heading(doc.blocks) then
+    -- Article has an explicit `### Notes` heading (Claude typically
+    -- adds this during stylize). The heading is already in the right
+    -- place; we just need to inject the stashed note content right
+    -- after it. Pandoc consumed the original `[^N]:` definitions when
+    -- parsing the markdown, so the heading was left orphan — that's
+    -- why earlier renders showed "Notes" with nothing under it.
+    local new_blocks = {}
+    for _, block in ipairs(doc.blocks) do
+      table.insert(new_blocks, block)
+      if block.t == "Header" then
+        local txt = pandoc.utils.stringify(block):lower()
+        if txt:match("^notes%s*$") or txt:match("^endnotes%s*$") then
+          for _, b in ipairs(emit_notes_blocks()) do
+            table.insert(new_blocks, b)
+          end
+        end
+      end
+    end
+    doc.blocks = pandoc.Blocks(new_blocks)
+    return doc
+  end
+
   if #collected_notes > 0 then
-    -- Append a "Notes" heading. Use the LiCS H1 treatment (rule above,
-    -- centered small-caps). Mark it with an identifier so future
-    -- styling can target it.
+    -- No explicit Notes heading — append one (LiCS print convention)
+    -- on its own page.
+    doc.blocks:insert(pandoc.RawBlock("typst", "#pagebreak()"))
     local notes_header = pandoc.Header(
       1,
       pandoc.Inlines({ pandoc.Str("Notes") }),

@@ -63,7 +63,7 @@ def stylize(
     style_guide: str,
     *,
     article_title: str = "",
-    max_output_tokens: int = 16000,
+    max_output_tokens: int = 64000,
 ) -> Tuple[Optional[str], dict]:
     """Send article body + style guide to Claude. Returns (new_body, metadata).
     If Claude is unavailable, returns (None, {error: ...}).
@@ -118,13 +118,23 @@ def stylize(
         f"Markdown body only — no code fence, no preamble."
     )
 
-    msg = _client().messages.create(
+    # Use streaming. Anthropic's SDK requires streaming for any request
+    # that *could* take longer than 10 minutes — at our 64K-token output
+    # cap on Haiku 4.5 the SDK refuses non-streaming requests outright.
+    # We accumulate the streamed text in-process and return it the same
+    # way as before; the streaming is transparent to the caller.
+    accumulated: list[str] = []
+    msg = None
+    with _client().messages.stream(
         model=_MODEL,
         max_tokens=max_output_tokens,
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}],
-    )
-    text = "".join(b.text for b in msg.content if hasattr(b, "text"))
+    ) as stream:
+        for chunk in stream.text_stream:
+            accumulated.append(chunk)
+        msg = stream.get_final_message()
+    text = "".join(accumulated)
 
     # Strip a possible code fence the model added against instructions.
     text = text.strip()
@@ -135,17 +145,39 @@ def stylize(
             text = text.rsplit("```", 1)[0]
     text = text.strip()
 
+    # Truncation detection. Claude returns `stop_reason == "max_tokens"`
+    # when the response hit the output cap mid-generation. We must NOT
+    # write that result back to disk — the trailing portion of the
+    # article (commonly the Works Cited and Notes sections) would be
+    # silently lost. Surface as an error so the caller can show the
+    # user a useful message and preserve the original article.
+    stop_reason = getattr(msg, "stop_reason", None)
+    truncated = (stop_reason == "max_tokens")
+
     # Crude per-token costs (Haiku 4.5 pricing as of 2026 — adjust if
     # using a different model). Just for display, not billing.
     cost_in = msg.usage.input_tokens * 0.000001
     cost_out = msg.usage.output_tokens * 0.000005
 
-    return text, {
+    meta = {
         "input_tokens": msg.usage.input_tokens,
         "output_tokens": msg.usage.output_tokens,
         "estimated_cost_usd": round(cost_in + cost_out, 4),
         "model": _MODEL,
+        "stop_reason": stop_reason,
+        "truncated": truncated,
     }
+    if truncated:
+        meta["error"] = (
+            f"Claude output was truncated at the {max_output_tokens:,}-token "
+            "cap. The article is likely too long for a single Stylize call. "
+            "Try splitting the article into halves (e.g., Body and Works Cited "
+            "separately), or stylize the Markdown source directly in chunks. "
+            "Your original article.md is unchanged."
+        )
+        return None, meta
+
+    return text, meta
 
 
 __all__ = ["available", "load_style_guide", "stylize"]

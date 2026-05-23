@@ -125,7 +125,7 @@ The in-app **Help** section walks through every step.
 
 The architecture is per-journal: each journal has its own template
 bundle (CSS, Pandoc HTML template, Pandoc Typst template, Lua filters,
-CSL stylesheet, wordmark image) under
+CSL stylesheet, wordmark image, **Claude style guide**) under
 `content/journals/<slug>/template/`. The LiCS bundle ships as a
 working example.
 
@@ -140,7 +140,30 @@ inserts a row in the `journals` table. You then customize via:
 
 - **Journal Settings** in the web UI (editorial team, board, mission,
   CrossRef config, header label template, wordmark upload)
-- Editing the template bundle files directly (CSS, Typst, Lua filters)
+- Editing the template bundle files directly (CSS, Typst, Lua filters,
+  style guide)
+
+### Adopting an existing print design (recommended if you have an IDML)
+
+If your journal already has a print layout in InDesign, you can derive
+your journal's typography directly from the IDML file:
+
+1. **In InDesign**: File → Save As → format **InDesign Markup (IDML)**.
+2. **Extract `Resources/Styles.xml`** from the IDML (it's a zip under the hood).
+3. **Survey the paragraph styles** with the one-liner Python script in
+   the [Installation guide](docs/help/12-installation.md#deriving-typography-from-an-existing-indesign-layout).
+4. **Map values** (font, point size, leading, indent) into your
+   journal's `template/article.typ` and `template/style-guide.md`.
+
+A walkthrough with the exact commands, mapping table, and value-by-value
+guidance is in the install guide:
+**[Deriving typography from an existing InDesign layout](docs/help/12-installation.md#deriving-typography-from-an-existing-indesign-layout)**.
+
+The LiCS bundle in this repo was derived this way — the typography
+values in `content/journals/lics/template/article.typ` and the
+canonical typography table in `content/journals/lics/template/style-guide.md`
+both come from a LiCS InDesign IDML export. It's a 30-minute workflow
+that pays for itself on every future article you lay out.
 
 See **[Help → Templates & Customization](docs/help/08-templates.md)**
 for the full guide, and **[Help → For Developers](docs/help/11-developers.md)**

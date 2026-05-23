@@ -10,6 +10,7 @@ from flask import (
     Flask, abort, flash, jsonify, redirect, render_template, request,
     send_from_directory, url_for,
 )
+from markupsafe import Markup
 from flask_login import current_user, login_required, login_user, logout_user
 from werkzeug.utils import secure_filename
 
@@ -1117,6 +1118,77 @@ def register_routes(app: Flask):
             "errors": result.errors,
         })
 
+    @app.route("/articles/<int:article_id>/weasy-pdf")
+    @login_required
+    def serve_weasy_pdf(article_id):
+        """Serve the WeasyPrint-rendered alternate PDF."""
+        return _serve_artifact(
+            article_id, "article-weasy.pdf",
+            as_attachment=request.args.get("dl") == "1",
+        )
+
+    @app.route("/articles/<int:article_id>/ocr-results")
+    @login_required
+    def serve_ocr_results(article_id):
+        """Serve the OCR results plain text file as a downloadable
+        text/plain response so the browser shows it in-line."""
+        from flask import Response
+        article = db.query_one("SELECT project_path FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        p = Path(article["project_path"]) / "ocr-results.txt"
+        if not p.exists():
+            abort(404)
+        return Response(p.read_text(encoding="utf-8"), mimetype="text/plain")
+
+    @app.route("/articles/<int:article_id>/verapdf-report")
+    @login_required
+    def serve_verapdf_report(article_id):
+        """Render the verapdf JSON report as a readable HTML page."""
+        import json
+        article = db.query_one("SELECT * FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        p = Path(article["project_path"]) / "verapdf-report.json"
+        if not p.exists():
+            flash("No verapdf report yet — run Validate PDF/UA first.", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+        try:
+            report = json.loads(p.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            report = {"raw": p.read_text(encoding="utf-8")}
+        return render_template(
+            "validation_report.html",
+            article=article, kind="verapdf",
+            report=report,
+            report_path=p.name,
+        )
+
+    @app.route("/articles/<int:article_id>/pa11y-report")
+    @login_required
+    def serve_pa11y_report(article_id):
+        """Render the pa11y JSON report as a readable HTML page."""
+        import json
+        article = db.query_one("SELECT * FROM articles WHERE id = ?", (article_id,))
+        if not article:
+            abort(404)
+        p = Path(article["project_path"]) / "pa11y-report.json"
+        if not p.exists():
+            flash("No pa11y report yet — run Audit HTML accessibility first.", "error")
+            return redirect(url_for("article_home", article_id=article_id))
+        try:
+            issues = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(issues, dict):
+                issues = issues.get("issues", [])
+        except json.JSONDecodeError:
+            issues = []
+        return render_template(
+            "validation_report.html",
+            article=article, kind="pa11y",
+            report=issues,
+            report_path=p.name,
+        )
+
     @app.route("/articles/<int:article_id>/html")
     @login_required
     def serve_html(article_id):
@@ -1352,7 +1424,13 @@ def register_routes(app: Flask):
             out = conversion.render_pdf_weasy(
                 Path(article["project_path"]), article["journal_slug"],
             )
-            flash(f"WeasyPrint PDF rendered: {out.name}", "success")
+            view_url = url_for("serve_weasy_pdf", article_id=article_id)
+            dl_url = view_url + "?dl=1"
+            flash(Markup(
+                f"WeasyPrint PDF rendered ({out.stat().st_size:,} bytes). "
+                f"<a href='{view_url}' target='_blank'>View →</a> &middot; "
+                f"<a href='{dl_url}'>Download →</a>"
+            ), "success")
         except Exception as exc:
             flash(f"WeasyPrint render failed: {exc}", "error")
         return redirect(url_for("article_home", article_id=article_id))
@@ -1374,11 +1452,16 @@ def register_routes(app: Flask):
         (Path(article["project_path"]) / "verapdf-report.json").write_text(
             __import__("json").dumps(report, indent=2), encoding="utf-8",
         )
+        view_url = url_for("serve_verapdf_report", article_id=article_id)
         if passed:
-            flash("PDF/UA-1 validation passed. Report saved to verapdf-report.json.", "success")
+            flash(Markup(
+                f"PDF/UA-1 validation passed. <a href='{view_url}' target='_blank'>View report →</a>"
+            ), "success")
         else:
-            err = report.get("error", "see verapdf-report.json for details")
-            flash(f"PDF/UA-1 validation failed. {err}", "warning")
+            err = report.get("error", "see report for details")
+            flash(Markup(
+                f"PDF/UA-1 validation failed. {err} <a href='{view_url}' target='_blank'>View report →</a>"
+            ), "warning")
         return redirect(url_for("article_home", article_id=article_id))
 
     @app.route("/articles/<int:article_id>/validate-html", methods=["POST"])
@@ -1397,16 +1480,18 @@ def register_routes(app: Flask):
         (Path(article["project_path"]) / "pa11y-report.json").write_text(
             __import__("json").dumps(issues, indent=2), encoding="utf-8",
         )
+        view_url = url_for("serve_pa11y_report", article_id=article_id)
         if passed:
-            flash("Accessibility audit clean — 0 issues found.", "success")
+            flash(Markup(
+                f"Accessibility audit clean — 0 issues found. <a href='{view_url}' target='_blank'>View report →</a>"
+            ), "success")
         else:
             errors = sum(1 for i in issues if i.get("type") == "error")
             warnings_n = sum(1 for i in issues if i.get("type") == "warning")
-            flash(
-                f"Accessibility audit found {errors} error(s), {warnings_n} warning(s). "
-                "See pa11y-report.json for details.",
-                "warning",
-            )
+            flash(Markup(
+                f"Accessibility audit: {errors} error(s), {warnings_n} warning(s). "
+                f"<a href='{view_url}' target='_blank'>View report →</a>"
+            ), "warning")
         return redirect(url_for("article_home", article_id=article_id))
 
     @app.route("/articles/<int:article_id>/stylize", methods=["POST"])
@@ -1660,11 +1745,12 @@ def register_routes(app: Flask):
                     n_processed += 1
         if n_processed:
             (apath / "ocr-results.txt").write_text("\n".join(out_lines), encoding="utf-8")
-            flash(
-                f"OCR'd {n_processed} image(s). Results in ocr-results.txt; "
-                "copy any tables from there into article.md as Markdown.",
-                "success",
-            )
+            view_url = url_for("serve_ocr_results", article_id=article_id)
+            flash(Markup(
+                f"OCR'd {n_processed} image(s). "
+                f"<a href='{view_url}' target='_blank'>View results →</a> "
+                "(copy any tables into article.md as Markdown)."
+            ), "success")
         else:
             flash("No OCR-able images found in assets/.", "warning")
         return redirect(url_for("article_home", article_id=article_id))

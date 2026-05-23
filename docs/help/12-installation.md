@@ -213,6 +213,140 @@ After setup: **Article page → Tools → Advanced → Stylize article ★**. Co
 
 **Customize the per-journal style guide** at `content/journals/<slug>/template/style-guide.md`. The default LiCS style guide ships with the repo — edit it once to match your journal's conventions, and the Stylize button uses it every time. See [Advanced Tools → Stylize](advanced-tools) for details.
 
+## Deriving typography from an existing InDesign layout
+
+If your journal has been laid out in InDesign for years, the IDML export of any past issue is a goldmine — it contains the exact paragraph styles (font, point size, leading, indentation, spacing) that define your house typography. Graphion can use those numbers directly in its Typst template so the rendered PDF closely matches your hand-laid issues.
+
+This is **optional** but highly recommended if you're adapting Graphion for a journal that already has an established print design.
+
+### Step 1: Export IDML from InDesign
+
+In InDesign, open a recent issue or article that represents your house style.
+
+1. **File → Save As...**
+2. Format dropdown → **InDesign Markup (IDML)**
+3. Save somewhere accessible (e.g., `~/Desktop/MyJournal.idml`)
+
+IDML is a zip-based format that preserves every style definition.
+
+### Step 2: Extract `Styles.xml`
+
+IDML is internally a zip archive. The styles live in `Resources/Styles.xml`. On Windows, the simplest way to extract just that file (avoiding rename hassles with hidden file extensions):
+
+```cmd
+cd "C:\path\to\folder\with\your\idml"
+python -c "import zipfile; zipfile.ZipFile('MyJournal.idml').extract('Resources/Styles.xml', '.')"
+```
+
+On macOS/Linux:
+
+```bash
+unzip -p MyJournal.idml Resources/Styles.xml > Styles.xml
+```
+
+Or just extract the whole IDML if you want to poke around:
+
+```bash
+python -c "import zipfile; zipfile.ZipFile('MyJournal.idml').extractall('idml-extracted')"
+```
+
+You only need `Styles.xml` for typography work. The other files (Stories, MasterSpreads, Graphic) contain article content, page-level masters, and color swatches respectively — useful as additional reference but not strictly needed.
+
+### Step 3: Survey the paragraph styles
+
+A short Python script enumerates every paragraph style with its key typographic values:
+
+```bash
+python -c "
+import xml.etree.ElementTree as ET
+root = ET.parse('Styles.xml').getroot()
+for ps in root.findall('.//ParagraphStyle'):
+    name = ps.get('Name', '')
+    pt = ps.get('PointSize', '')
+    weight = ps.get('FontStyle', '')
+    first_ind = ps.get('FirstLineIndent', '0')
+    left_ind = ps.get('LeftIndent', '0')
+    space_b = ps.get('SpaceBefore', '0')
+    space_a = ps.get('SpaceAfter', '0')
+    align = ps.get('Justification', '')
+    props = ps.find('Properties')
+    leading = font = ''
+    if props is not None:
+        le = props.find('Leading');     leading = le.text if le is not None else ''
+        fo = props.find('AppliedFont'); font = fo.text if fo is not None else ''
+    print(f'{name}: font={font} size={pt}pt leading={leading} weight={weight} align={align} indent=first:{first_ind} left:{left_ind} space=before:{space_b} after:{space_a}')
+"
+```
+
+The output lists every paragraph style in the document — typically 50-100 entries. Look for the ones that correspond to your editorial structure:
+
+| Common InDesign style name | Maps to |
+|---|---|
+| BodyText / Body / Body Text / Body First | Article body |
+| ChapterTitle / Article Title / Title | Article title |
+| SubHead / Section Head / Heading 1 / H1 | Section heading |
+| SubSection Heading / Heading 2 / H2 | Subsection |
+| BlockQuote / Block Quote / Quote | Block quote |
+| Pull Quotes / Pull-Quote / Sidebar | Pull quote |
+| WorksCited / Bibliography / References | Works Cited entries |
+| Notes / Footnote / Endnote | Endnote text |
+| caption / Figure Caption | Figure caption |
+| PageNumbers / Page Number | Page numbers |
+| RunningHeader / Running Head | Running header |
+
+Ignore the dozens of `Paragraph Style N` and Word-imported clutter styles — most are unused. Focus on the named editorial styles that match the table above.
+
+### Step 4: Map values to the Typst template
+
+Open `content/journals/<your-journal-slug>/template/article.typ`. Update these values to match your IDML export:
+
+- **`body-font`** and **`display-font`** font stacks (top of file) — list your house fonts first, with free fallbacks after (EB Garamond is bundled with Typst, GFS Didot is free for high-contrast display, etc.)
+- **`#set text(font: body-font, size: <Npt>, ...)`** — body size from the BodyText paragraph style
+- **`#set par(leading: <Mem>, first-line-indent: <Npt>, ...)`** — leading from Leading property (compute as `(leading - body_size) / body_size` for em-based leading; or just use absolute points), and first-line indent from FirstLineIndent
+- **`#show heading.where(level: 1)`** — section heading: font, size, alignment, spacing before/after from SubHead / Article Sections
+- **`#show heading.where(level: 2)`** — subsection: font, size, alignment from SubSection Heading
+- **Title block** (`#align(center, { ... [$title$] ... })`) — title size from ChapterTitle, subtitle treatment, author byline
+- **Block quote** (`#show quote.where(block: true)`) — left/right pad from BlockQuote's LeftIndent
+- **Page header/footer** (`#set page(header: ..., footer: ...)`) — size, font, alignment from RunningHeader / PageNumbers
+
+Once you've updated `article.typ`, re-render any article in the app — the PDF should now closely match your hand-laid InDesign reference.
+
+### Step 5: Document the typography in the editorial style guide
+
+The per-journal style guide at `content/journals/<your-journal-slug>/template/style-guide.md` (read by Graphion's Claude-powered **Stylize** button) should have a "House typography" section documenting the canonical values. This serves three purposes:
+
+1. **Editor reference** — anyone working on the journal can see what the rendered output should look like
+2. **Claude context** — when Stylize sees the typography table as the canonical source of truth, it disambiguates editorial structure (e.g., "this looks like a section head — it should be `##` because that maps to Didot 13pt centered in the table")
+3. **Future-proofing** — when the journal redesigns, you update the table here first, then propagate to `article.typ`, `article.css`, etc.
+
+See `content/journals/lics/template/style-guide.md` for the canonical example — the "House typography" section near the top of the file shows the format. You can copy that structure into your own journal's guide and fill in your IDML-derived values.
+
+### Step 6 (optional): Custom font installation
+
+If your house font is commercial (Minion Pro, Didot, Adobe Garamond, etc.), it's typically already installed on machines that have InDesign. Typst will pick it up automatically via the system font resolver. If you need to install fonts on a machine that doesn't have InDesign:
+
+- **Open-source equivalents**: EB Garamond (Minion-ish), GFS Didot (Didot), Crimson Text (Garamond-ish), Inter (sans). All free from Google Fonts / SIL repositories.
+- **Commercial fonts**: install per-license through the relevant foundry; Typst reads system-installed fonts on all platforms.
+
+Test font availability with a one-liner:
+
+```bash
+python -c "import typst; print(typst.query('test.typ', '--font'))" 2>&1 | head -20
+```
+
+(Or simpler: render an article and check the resulting PDF — if Typst can't find your declared font, it falls through the fallback chain in the template and the rendered output uses the next-available face.)
+
+### Recap
+
+A 30-minute workflow that pays for itself on every future article:
+
+1. Export IDML from a representative recent issue
+2. Extract `Styles.xml`
+3. Run the survey script, note your editorial style values
+4. Update `article.typ` in your journal's template directory
+5. Document the values in the style guide for editor reference + Claude context
+6. Render an article and compare to your hand-laid reference PDFs
+
 ## Configuration knobs
 
 Most config lives in the database (set via the Journal Settings UI). A few environment variables override defaults:
