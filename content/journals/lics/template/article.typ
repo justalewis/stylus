@@ -232,10 +232,15 @@
   v(0.6em)
 })
 
+// Labels use `upper()` rather than `smallcaps()` because Didot fonts
+// (the display-font stack) don't ship OpenType small-caps glyphs.
+// Typst's synthesized small-caps at 8pt with wide tracking renders as
+// near-illegible dots; full-size caps at 8.5pt with slightly tighter
+// tracking gives the same "label" feel and prints cleanly.
 $if(keywords)$
 #align(center, block(width: 80%, {
   set par(first-line-indent: 0pt)
-  text(font: display-font, size: 8pt, tracking: 0.22em, fill: ink-soft, smallcaps("Keywords"))
+  text(font: display-font, size: 8.5pt, tracking: 0.2em, fill: ink-soft, upper("Keywords"))
   v(0.3em)
   text(style: "italic", size: 9pt, fill: ink-soft, [$for(keywords)$$keywords$$sep$; $endfor$])
 }))
@@ -245,7 +250,7 @@ $endif$
 $if(abstract)$
 #align(center, block(width: 85%, {
   set par(first-line-indent: 0pt, justify: true, leading: 0.5em)
-  text(font: display-font, size: 8pt, tracking: 0.22em, fill: ink-soft, smallcaps("Abstract"))
+  text(font: display-font, size: 8.5pt, tracking: 0.2em, fill: ink-soft, upper("Abstract"))
   v(0.4em)
   text(size: 9.75pt, [$abstract$])
 }))

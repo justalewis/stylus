@@ -22,6 +22,56 @@
 
 local first_h1_seen = false
 
+-- Convert ` | ` (space-pipe-space) tokens in an Inlines list into
+-- LineBreak elements. This is the editorial convention for forcing a
+-- line break in a title or heading — long titles like
+-- "Facing What's Human: | From Dialogic Intertextuality | to Translingual Praxis"
+-- get the breaks the editor specified rather than whatever Typst's
+-- line-breaker decides on its own. Pandoc renders LineBreak natively
+-- per format (Typst `\`, HTML `<br>`, JATS just collapses to space).
+--
+-- Pandoc tokenizes `## Foo | Bar` as [Str("Foo"), Space, Str("|"),
+-- Space, Str("Bar")], so a pipe usually appears as its own Str node
+-- bracketed by Space inlines. We drop the surrounding Spaces — one
+-- by rewinding the output, one by skipping a Space whose immediate
+-- predecessor in the output is a LineBreak — so the line doesn't
+-- start or end with a stray space. We only inspect top-level Str
+-- nodes; pipes nested inside Emph/Strong/Link are left alone.
+local function split_pipes_to_linebreaks(inlines)
+  local out = pandoc.Inlines({})
+  for _, inl in ipairs(inlines) do
+    if inl.t == "Space" and #out > 0 and out[#out].t == "LineBreak" then
+      -- Drop the leading space that followed a forced break.
+    elseif inl.t == "Str" and inl.text:find("|", 1, true) then
+      local parts = {}
+      local i = 1
+      while true do
+        local s, e = inl.text:find("|", i, true)
+        if not s then
+          table.insert(parts, inl.text:sub(i))
+          break
+        end
+        table.insert(parts, inl.text:sub(i, s - 1))
+        table.insert(parts, "|")
+        i = e + 1
+      end
+      for _, p in ipairs(parts) do
+        if p == "|" then
+          while #out > 0 and out[#out].t == "Space" do
+            out:remove(#out)
+          end
+          out:insert(pandoc.LineBreak())
+        elseif p ~= "" then
+          out:insert(pandoc.Str(p))
+        end
+      end
+    else
+      out:insert(inl)
+    end
+  end
+  return out
+end
+
 local function is_references_heading(header)
   local txt = pandoc.utils.stringify(header):lower()
   return txt:match("^works cited") ~= nil
@@ -34,7 +84,14 @@ local function _is_notes_text(header)
   return txt:match("^notes%s*$") ~= nil or txt:match("^endnotes%s*$") ~= nil
 end
 
+-- Pipe-to-linebreak: split the inline content of every heading on
+-- ` | ` tokens so editors can control where long headings wrap. The
+-- transformation happens before the references/notes tagging below so
+-- a `## Works Cited: | Primary Sources` would still get the
+-- references treatment (we stringify before checking, which collapses
+-- the LineBreak back to a space for the match).
 function Header(el)
+  el.content = split_pipes_to_linebreaks(el.content)
   -- Tag the references/works-cited heading regardless of source level.
   -- Some articles use `### Works Cited` (H3) — typed that way by an
   -- editor or by Claude per the style guide — others use `# Works Cited`
@@ -355,7 +412,23 @@ local function adapt_typst_tables(blocks)
   return out
 end
 
+-- Apply the pipe-to-linebreak convention to title and subtitle in the
+-- document metadata, so editors can write
+--   title: "Facing What's Human: | From Dialogic Intertextuality | to Translingual Praxis"
+-- in YAML and get a three-line title on the title page. Pandoc parses
+-- title/subtitle as MetaInlines, which can hold LineBreak nodes; the
+-- Typst writer renders them as `\`, the HTML writer as `<br>`.
+local function split_pipes_in_meta(meta)
+  for _, key in ipairs({ "title", "subtitle" }) do
+    if meta[key] and meta[key].t == "MetaInlines" then
+      meta[key] = pandoc.MetaInlines(split_pipes_to_linebreaks(meta[key]))
+    end
+  end
+  return meta
+end
+
 function Pandoc(doc)
+  doc.meta = split_pipes_in_meta(doc.meta)
   if FORMAT == "typst" then
     doc = collect_typst_endnotes(doc)
     doc.blocks = inject_typst_dropcap(doc.blocks)
